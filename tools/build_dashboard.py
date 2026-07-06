@@ -187,7 +187,9 @@ def parse_doctor_day_matrix(ws, value_name):
         vals = [str(v).strip() if v else "" for v in r]
         if "Department" in vals and "Doctor" in vals:
             dept_ix, doc_ix = vals.index("Department"), vals.index("Doctor")
-    out, last_dept = {}, ""
+    day_of = {j: rows[hrow][j].day if isinstance(rows[hrow][j], datetime.date)
+              else rows[hrow][j].date().day for j in datecols}
+    out, daily, last_dept = {}, {}, ""
     for r in rows[hrow + 1:]:
         dept = str(r[dept_ix]).strip() if len(r) > dept_ix and r[dept_ix] else ""
         if dept: last_dept = dept
@@ -198,7 +200,11 @@ def parse_doctor_day_matrix(ws, value_name):
         tot = sum(num(r[j]) for j in datecols if j < len(r))
         key = (norm(last_dept), norm(doc))
         out[key] = out.get(key, 0) + tot
-    return out
+        dd = daily.setdefault(norm(doc), {})
+        for j in datecols:
+            if j < len(r) and num(r[j]):
+                dd[day_of[j]] = dd.get(day_of[j], 0) + num(r[j])
+    return out, daily
 
 def parse_mom_fy(ws):
     """'MoM FY 26-27' -> {month 'YYYY-MM': {bedCap, occDays, alos}}"""
@@ -321,13 +327,15 @@ def main():
         w = openpyxl.load_workbook(f, read_only=True, data_only=True)
         sheets = {norm(s): s for s in w.sheetnames}
         def get(name): return w[sheets[norm(name)]] if norm(name) in sheets else None
-        docs = {}
+        docs, doc_daily = {}, {}
         pairs = [("Doc wise revenue date conso.", "rev"), ("Patient visits", "opv"),
                  ("No. Admissions", "adm"), ("No. discharges", "dis")]
         for sn, field in pairs:
             ws = get(sn)
             if ws is None: continue
-            for (dept, doc), val in parse_doctor_day_matrix(ws, field).items():
+            totals, daily = parse_doctor_day_matrix(ws, field)
+            if field == "rev": doc_daily = daily
+            for (dept, doc), val in totals.items():
                 rec = docs.setdefault(doc, {"dept": dept, "rev": 0, "opv": 0, "adm": 0, "dis": 0})
                 if dept: rec["dept"] = dept
                 rec[field] += val
@@ -336,7 +344,9 @@ def main():
         w.close()
         history[mkey] = {"asOf": d.strftime("%Y-%m-%d"),
                          "daysElapsed": d.day,
-                         "doctors": {k: v for k, v in docs.items() if any(v[f] for f in ("rev","opv","adm","dis"))}}
+                         "doctors": {k: v for k, v in docs.items() if any(v[f] for f in ("rev","opv","adm","dis"))},
+                         "docDaily": {k: {str(day): round(v, 0) for day, v in dd.items()}
+                                      for k, dd in doc_daily.items() if dd}}
     json.dump(history, open(hist_path, "w"))
     print("History months:", sorted(history))
 
@@ -446,6 +456,14 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 <th class="r" data-k="recov">Recovered*</th><th class="r" data-k="dama">DAMA*</th><th class="r" data-k="exp">Expired*</th>
 <th class="r" data-k="cash">Cash mix*</th>
 </tr></thead><tbody></tbody></table></div></div>
+
+<div class="panel"><h2>Doctor × Day Revenue Matrix</h2>
+<div class="note" id="mxnote"></div>
+<div style="margin-bottom:8px">
+<span id="mxbtns"></span>
+<input id="mxFilter" placeholder="Filter doctor…" style="padding:5px 10px;border:1px solid #d4dbe3;border-radius:6px;width:220px;font-size:12.5px;margin-left:8px">
+</div>
+<div class="scroll" style="max-height:520px;overflow:auto"><table id="matrix"><thead></thead><tbody></tbody></table></div></div>
 
 <div class="panel"><h2>Department League Table — Month on Month</h2>
 <div class="note" id="dtnote"></div>
@@ -654,6 +672,48 @@ document.querySelectorAll('#league th').forEach(th=>th.onclick=()=>{
  const k=th.dataset.k; if(sortK===k)sortDir*=-1; else {sortK=k;sortDir=-1;} renderLeague();});
 document.getElementById('docFilter').oninput=renderLeague;
 renderLeague();
+
+// ---------------- doctor x day revenue matrix ----------------
+const mxMonths=hMonths.filter(mk=>D.history[mk].docDaily&&Object.keys(D.history[mk].docDaily).length);
+let mxMonth=mxMonths[mxMonths.length-1]||null;
+window.drawMatrix=function(mk){
+ mxMonth=mk;
+ const h=D.history[mk], dd=h.docDaily||{};
+ const nDays=daysIn(mk,h);
+ const q=(document.getElementById('mxFilter').value||'').toUpperCase();
+ // rows sorted by month total desc
+ let docs=Object.keys(dd).map(n=>{
+  const tot=Object.values(dd[n]).reduce((a,v)=>a+v,0);
+  return {n, tot};}).filter(x=>x.tot>1000)
+  .filter(x=>!q||x.n.includes(q))
+  .sort((a,b)=>b.tot-a.tot).slice(0,50);
+ const days=[...Array(nDays).keys()].map(i=>i+1);
+ const [y,m]=mk.split('-').map(Number);
+ const dows=days.map(d=>'SMTWTFS'[new Date(y,m-1,d).getDay()]);
+ document.querySelector('#matrix thead').innerHTML=
+  '<tr><th style="position:sticky;left:0;background:#fff;z-index:2">Doctor</th><th class="r">Total ₹L</th>'+
+  days.map((d,i)=>`<th class="r" style="min-width:44px${dows[i]==='S'?';color:#c0392b':''}">${d}<br><span style="font-weight:400">${dows[i]}</span></th>`).join('')+'</tr>';
+ const maxAll=Math.max(...docs.slice(0,15).map(x=>Math.max(...Object.values(dd[x.n]))));
+ document.querySelector('#matrix tbody').innerHTML=docs.map(x=>{
+  const row=dd[x.n];
+  return '<tr><td class="doc" style="position:sticky;left:0;background:#fff;z-index:1" title="'+tc(x.n)+'">'+tc(x.n)+'</td>'+
+   `<td class="r"><b>${(x.tot/L).toFixed(1)}</b></td>`+
+   days.map(d=>{
+    const v=row[String(d)]||0;
+    if(!v) return '<td class="r" style="color:#c8d0d9">·</td>';
+    const a=Math.min(v/maxAll,1);
+    const bg=`rgba(43,124,190,${(0.06+a*0.5).toFixed(2)})`;
+    const txt=v>=1e5? (v/L).toFixed(1) : (v/1000).toFixed(0)+'k';
+    return `<td class="r" style="background:${bg}${a>0.65?';color:#fff':''}" title="₹${Math.round(v).toLocaleString('en-IN')}">${txt}</td>`;
+   }).join('')+'</tr>';
+ }).join('');
+ document.getElementById('mxnote').innerHTML=
+  `Billed gross revenue attributed to each doctor, by calendar day of <b>${mName(mk)}</b> (₹ Lakhs; values under ₹1 L shown as ₹’000 with “k”). Sundays in red. Top 50 doctors — use the filter for others. Note: this is billed revenue, not cash collected — the MIS does not attribute collections to doctors.`;
+ document.querySelectorAll('#mxbtns .mbtn').forEach(b=>b.classList.toggle('on',b.dataset.k===mk));
+}
+document.getElementById('mxbtns').innerHTML=mxMonths.map(k=>`<button class="mbtn" data-k="${k}" onclick="drawMatrix('${k}')">${k}</button>`).join('');
+document.getElementById('mxFilter').oninput=()=>drawMatrix(mxMonth);
+if(mxMonth)drawMatrix(mxMonth);
 
 // ---------------- department league table ----------------
 if(hCur){
