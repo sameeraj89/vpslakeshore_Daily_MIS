@@ -270,6 +270,18 @@ def main():
             lbl = str(r[6]).strip() if r[6] else ""
             if lbl in ("OP","IP","PH","IP Conv. Rate"):
                 summary.setdefault("real", {})[lbl] = [num(r[7]), num(r[8])]
+        for r in rows:
+            lbl = str(r[4]).strip() if r[4] else ""
+            if lbl == "Total No. of Working Days": summary["workingDays"] = num(r[7])
+            if lbl == "Current Cumulative days":   summary["cumDays"] = num(r[7])
+        # MONTH (Projections) block: ACTUAL / BUDGET rows, Total Revenue col H ('000)
+        in_proj = False
+        for r in rows:
+            a = str(r[0]).strip() if r[0] else ""
+            b = str(r[1]).strip() if r[1] else ""
+            if a.startswith("MONTH"): in_proj = True; continue
+            if in_proj and b == "ACTUAL":  summary["projActual"] = num(r[7]) * 1000
+            if in_proj and b == "BUDGET":  summary["monthBudget"] = num(r[7]) * 1000; in_proj = False
     wb.close()
 
     # daily series: newest flash per month carries the whole month
@@ -333,8 +345,8 @@ def main():
         for sn, field in pairs:
             ws = get(sn)
             if ws is None: continue
-            totals, daily = parse_doctor_day_matrix(ws, field)
-            if field == "rev": doc_daily = daily
+            totals, per_day = parse_doctor_day_matrix(ws, field)
+            if field == "rev": doc_daily = per_day
             for (dept, doc), val in totals.items():
                 rec = docs.setdefault(doc, {"dept": dept, "rev": 0, "opv": 0, "adm": 0, "dis": 0})
                 if dept: rec["dept"] = dept
@@ -540,7 +552,21 @@ const bo=(D.summary.bedOcc||[0,0,0]);
 const lastEff=eff.filter(e=>e.arpob).slice(-1)[0]||{};
 const prevEff=eff.filter(e=>e.arpob).slice(-2)[0]||{};
 const conv=(D.summary.real&&D.summary.real['IP Conv. Rate'])||[0,0];
+// month run-rate projection: MTD ÷ elapsed working days × total working days, vs full-month budget
+const wdTot=D.summary.workingDays||0, wdCum=D.summary.cumDays||0;
+const dailyKeys0=Object.keys(D.daily).sort();
+const curKey=dailyKeys0[dailyKeys0.length-1];
+const fullBud=D.summary.monthBudget||(curKey? D.daily[curKey].reduce((a,r)=>a+r.budTot,0):0);
+const rrDay=wdCum? (mtd.revTot||0)/wdCum:0;
+const proj=rrDay*wdTot;
+let projCard='';
+if(proj&&fullBud){
+ const p=pct(proj,fullBud);
+ projCard=card('Month Run-Rate → Landing',fmtCr(proj),
+  `₹${(rrDay/CR).toFixed(2)} Cr/wk-day × ${wdTot} days · <span class="${p>=0?'up':'dn'}">${p>=0?'▲ +':'▼ '}${p.toFixed(1)}% vs ₹${(fullBud/CR).toFixed(0)} Cr budget</span>`,'',1);
+}
 document.getElementById('cards').innerHTML=
+ projCard+
  card('MTD Revenue ('+(mtd.month||'')+')',fmtCr(mtd.revTot||0),d1,c1)+
  card('YTD Revenue FY 26-27',fmtCr(ytd.rev),d2,c2)+
  card('YTD YoY',fmtCr(prevYtdRev)+' LY',d3,c3,1)+
