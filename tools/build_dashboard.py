@@ -436,6 +436,10 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 <div class="wrap">
 <div class="cards" id="cards"></div>
 
+<div class="panel"><h2>Daily Commentary</h2>
+<div class="note" id="cmnote"></div>
+<div id="cmtext" style="font-size:13px;line-height:1.7;max-width:1000px"></div></div>
+
 <div class="panel"><h2>Daily Gross Revenue — Actual vs Budget</h2>
 <div class="note">OP / IP / Pharmacy stacked; line = budgeted total.</div>
 <div id="mbtns" style="margin-bottom:8px"></div><canvas id="dailyChart"></canvas></div>
@@ -842,6 +846,37 @@ new Chart(document.getElementById('deptChart'),{type:'bar',data:{labels:D.deptTo
 
 document.getElementById('foot').innerHTML='<b>Files parsed:</b> '+D.filesParsed.map(f=>'<span class="pill">'+f+'</span>').join('')+
  '<br>Gross revenue per Daily Revenue Flash. Doctor-month figures from Daily MIS doctor sheets (newest file per month; current month is MTD — compare on ₹/day run-rate). Discharge status / ALOS / payer mix cover only dates with a flash file on hand. ARPOB = gross revenue ÷ occupied bed-days; ALOS from MIS MoM sheet. Operations include VPSLMC (satellite) figures where the source does.';
+
+// ---- daily commentary (auto-generated) ----
+(function(){
+ const rows=D.daily[curKey]||[]; if(!rows.length)return;
+ const last=rows[rows.length-1];
+ const dObj=new Date(last.date+'T12:00:00');
+ const dName=dObj.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+ document.getElementById('cmnote').textContent='Auto-generated from the '+D.latestDate+' flash and Daily MIS.';
+ const fL=v=>'\u20B9'+(v/L).toFixed(1)+' L';
+ const workRows=rows.filter(r=>r.revTot>0);
+ const prior=workRows.slice(0,-1).slice(-7);
+ const avg7=prior.length? prior.reduce((a,r)=>a+r.revTot,0)/prior.length:0;
+ const vb=pct(last.revTot,last.budTot), va=avg7?pct(last.revTot,avg7):0;
+ const mtdRev=rows.reduce((a,r)=>a+r.revTot,0), mtdBud=rows.reduce((a,r)=>a+r.budTot,0), mtdP=pct(mtdRev,mtdBud);
+ const mix=[['IP',last.revIP],['OP',last.revOP],['Pharmacy',last.revPH]].sort((a,b)=>b[1]-a[1]);
+ const dd=(D.history[curM]&&D.history[curM].docDaily)||{};
+ const dayK=String(dObj.getDate());
+ const docs=(D.history[curM]&&D.history[curM].doctors)||{};
+ const tops=Object.entries(dd).map(([k,v])=>[k,v[dayK]||0]).filter(x=>x[1]>0&&!/^LHRC/i.test(x[0])).sort((a,b)=>b[1]-a[1]).slice(0,3);
+ const topTxt=tops.map(([k,v])=>tc(k)+(docs[k]&&docs[k].dept?' ('+tc(docs[k].dept)+', '+fL(v)+')':' ('+fL(v)+')')).join(', ');
+ const conv=last.revTot? last.collTot/last.revTot*100:0;
+ const isSun=(last.dow||'').toUpperCase().startsWith('SUN');
+ const s=[];
+ s.push(`<b>${dName}</b> closed at <b>${fL(last.revTot)}</b> gross revenue against a budget of ${fL(last.budTot)} (<span class="${vb>=0?'up':'dn'}">${vb>=0?'+':''}${vb.toFixed(1)}%</span>)`+(avg7?`, ${Math.abs(va).toFixed(0)}% ${va>=0?'above':'below'} the trailing 7-day average of ${fL(avg7)}.`:'.'));
+ s.push(`The day was led by ${mix[0][0]} at ${fL(mix[0][1])}, followed by ${mix[1][0]} (${fL(mix[1][1])}) and ${mix[2][0]} (${fL(mix[2][1])}).`);
+ if(topTxt) s.push(`Top contributors: ${topTxt}.`);
+ s.push(`Collections came in at ${fL(last.collTot)} \u2014 ${conv.toFixed(0)}% of the day's gross.`);
+ s.push(`Month to date stands at ${fmtCr(mtdRev)} vs ${fmtCr(mtdBud)} budgeted (<span class="${mtdP>=0?'up':'dn'}">${mtdP>=0?'+':''}${mtdP.toFixed(1)}%</span>)`+((proj&&fullBud)?`, with the working-day run-rate pointing to a ${fmtCr(proj)} landing against the \u20B9${(fullBud/CR).toFixed(0)} Cr month budget.`:'.'));
+ if(isSun) s.push('Sunday posting \u2014 the low absolute number is seasonal, not an anomaly.');
+ document.getElementById('cmtext').innerHTML=s.join(' ');
+})();
 </script></body></html>
 """
 
