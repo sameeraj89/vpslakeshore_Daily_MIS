@@ -206,6 +206,36 @@ def parse_doctor_day_matrix(ws, value_name):
                 dd[day_of[j]] = dd.get(day_of[j], 0) + num(r[j])
     return out, daily
 
+def parse_calicut_input(ws):
+    """'Input Calicut' (service group x day) -> ({service: month_total}, {iso_date: day_total})"""
+    rows = list(ws.iter_rows(values_only=True))
+    hrow, datecols = None, []
+    for i, r in enumerate(rows[:6]):
+        dc = [(j, c.date() if isinstance(c, datetime.datetime) else c)
+              for j, c in enumerate(r) if isinstance(c, (datetime.datetime, datetime.date))]
+        if len(dc) >= 5:
+            months = {}
+            for _, c in dc: months[(c.year, c.month)] = months.get((c.year, c.month), 0) + 1
+            dom = max(months, key=months.get)
+            seen = set()
+            for j, c in dc:
+                if (c.year, c.month) == dom and c not in seen:
+                    seen.add(c); datecols.append((j, c))
+            hrow = i; break
+    if hrow is None: return {}, {}
+    serv, daily = {}, {}
+    for r in rows[hrow + 1:]:
+        lbl = str(r[0]).strip() if r[0] else ""
+        if not lbl: continue
+        if norm(lbl) in ("GRAND TOTAL", "TOTAL"):
+            for j, c in datecols:
+                if j < len(r) and num(r[j]):
+                    daily[c.strftime("%Y-%m-%d")] = num(r[j])
+            break
+        tot = sum(num(r[j]) for j, _ in datecols if j < len(r))
+        if tot: serv[lbl] = serv.get(lbl, 0) + tot
+    return serv, daily
+
 def parse_mom_fy(ws):
     """'MoM FY 26-27' -> {month 'YYYY-MM': {bedCap, occDays, alos}}"""
     rows = list(ws.iter_rows(values_only=True, max_col=16))
@@ -353,8 +383,29 @@ def main():
                 rec[field] += val
         ws = get("MoM FY 26-27") or get("MoM FY 27-28")
         if ws is not None: mom_fy.update(parse_mom_fy(ws))
+        # ---- Calicut satellite (VPSLMC) sheets ----
+        cal = {}
+        ws = get("Input Calicut")
+        if ws is not None:
+            cserv, cdaily = parse_calicut_input(ws)
+            if cdaily:
+                cal["serv"] = {k: round(v) for k, v in cserv.items()}
+                cal["daily"] = {k: round(v) for k, v in cdaily.items()}
+        cdocs = {}
+        for sn, field in [("Doc wise revenue Calicut", "rev"), ("OP Visit-Calicut", "opv")]:
+            ws = get(sn)
+            if ws is None: continue
+            parsed = parse_doctor_day_matrix(ws, field)
+            if not parsed or not parsed[0]: continue
+            for (dept, doc), val in parsed[0].items():
+                rec = cdocs.setdefault(doc, {"dept": dept, "rev": 0, "opv": 0})
+                if dept: rec["dept"] = dept
+                rec[field] += val
+        if cdocs:
+            cal["doctors"] = {k: {"dept": v["dept"], "rev": round(v["rev"]), "opv": round(v["opv"])}
+                              for k, v in cdocs.items() if v["rev"] or v["opv"]}
         w.close()
-        history[mkey] = {"asOf": d.strftime("%Y-%m-%d"),
+        history[mkey] = {"calicut": cal, "asOf": d.strftime("%Y-%m-%d"),
                          "daysElapsed": d.day,
                          "doctors": {k: v for k, v in docs.items() if any(v[f] for f in ("rev","opv","adm","dis"))},
                          "docDaily": {k: {str(day): round(v, 0) for day, v in dd.items()}
@@ -506,6 +557,25 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 <div class="panel"><h2>Department Revenue — Captured Flash Days</h2>
 <div class="note" id="deptnote"></div><canvas id="deptChart" style="max-height:400px"></canvas></div>
 </div>
+
+<div id="calSection" style="display:none">
+<h2 style="color:var(--maroon);font-size:17px;margin:28px 0 12px;border-bottom:2px solid var(--maroon);padding-bottom:6px">VPS Lakeshore Medical Centre · Calicut (Satellite)</h2>
+<div class="cards" id="calcards"></div>
+<div class="grid">
+<div class="panel"><h2>Calicut — Daily Revenue</h2>
+<div class="note" id="caldnote"></div>
+<div id="calbtns" style="margin-bottom:8px"></div><canvas id="calDaily"></canvas></div>
+<div class="panel"><h2>Calicut — Service Group Mix</h2>
+<div class="note" id="calsnote"></div><canvas id="calServ" style="max-height:330px"></canvas></div>
+</div>
+<div class="panel"><h2>Calicut — Doctor League</h2>
+<div class="note" id="callnote"></div>
+<div class="scroll"><table id="calTable"><thead><tr>
+<th>Doctor</th><th>Department</th><th class="r">Rev cur (₹L)</th><th class="r">₹L/day</th>
+<th class="r">OP visits</th><th class="r">Rev prev (₹L)</th><th class="r">Δ run-rate</th><th class="r">Share</th>
+</tr></thead><tbody></tbody></table></div></div>
+</div>
+
 <footer id="foot"></footer>
 </div>
 <script>
@@ -845,7 +915,7 @@ new Chart(document.getElementById('deptChart'),{type:'bar',data:{labels:D.deptTo
  options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{title:{display:true,text:'₹ Lakhs'}},y:{ticks:{font:{size:10.5}}}}}});
 
 document.getElementById('foot').innerHTML='<b>Files parsed:</b> '+D.filesParsed.map(f=>'<span class="pill">'+f+'</span>').join('')+
- '<br>Gross revenue per Daily Revenue Flash. Doctor-month figures from Daily MIS doctor sheets (newest file per month; current month is MTD — compare on ₹/day run-rate). Discharge status / ALOS / payer mix cover only dates with a flash file on hand. ARPOB = gross revenue ÷ occupied bed-days; ALOS from MIS MoM sheet. Operations include VPSLMC (satellite) figures where the source does.';
+ '<br>Gross revenue per Daily Revenue Flash. Doctor-month figures from Daily MIS doctor sheets (newest file per month; current month is MTD — compare on ₹/day run-rate). Discharge status / ALOS / payer mix cover only dates with a flash file on hand. ARPOB = gross revenue ÷ occupied bed-days; ALOS from MIS MoM sheet. Operations include VPSLMC (satellite) figures where the source does. Calicut section from the Daily MIS "Input Calicut" / "Doc wise revenue Calicut" / "OP Visit-Calicut" sheets.';
 
 // ---- daily commentary (auto-generated) ----
 (function(){
@@ -876,6 +946,84 @@ document.getElementById('foot').innerHTML='<b>Files parsed:</b> '+D.filesParsed.
  s.push(`Month to date stands at ${fmtCr(mtdRev)} vs ${fmtCr(mtdBud)} budgeted (<span class="${mtdP>=0?'up':'dn'}">${mtdP>=0?'+':''}${mtdP.toFixed(1)}%</span>)`+((proj&&fullBud)?`, with the working-day run-rate pointing to a ${fmtCr(proj)} landing against the \u20B9${(fullBud/CR).toFixed(0)} Cr month budget.`:'.'));
  if(isSun) s.push('Sunday posting \u2014 the low absolute number is seasonal, not an anomaly.');
  document.getElementById('cmtext').innerHTML=s.join(' ');
+})();
+
+// ---------------- Calicut satellite (VPSLMC) ----------------
+(function(){
+ const calM=hMonths.filter(mk=>D.history[mk].calicut&&D.history[mk].calicut.daily);
+ if(!calM.length)return;
+ document.getElementById('calSection').style.display='';
+ const ck=calM[calM.length-1], pk=calM[calM.length-2];
+ const c=D.history[ck].calicut, p=pk? D.history[pk].calicut:null;
+ const dC=daysIn(ck,D.history[ck]), dP=pk? daysIn(pk,D.history[pk]):1;
+ const sum=o=>Object.values(o||{}).reduce((a,v)=>a+v,0);
+ const mtdRev=sum(c.daily), rr=mtdRev/dC;
+ const pRev=p? sum(p.daily):0, prr=p? pRev/dP:0;
+ const opTot=Object.values(c.doctors||{}).reduce((a,v)=>a+(v.opv||0),0);
+ const active=Object.values(c.doctors||{}).filter(v=>v.rev>0).length;
+ const momP=prr? (rr/prr-1)*100:null;
+ const share=(mtd.revTot)? mtdRev/mtd.revTot*100:null;
+ document.getElementById('calcards').innerHTML=
+  card('Calicut MTD Revenue ('+mName(ck)+')','\u20b9'+(mtdRev/L).toFixed(1)+' L',
+   share!=null? share.toFixed(1)+'% of unit gross':'','',1)+
+  card('Run-rate','\u20b9'+(rr/L).toFixed(2)+' L/day',
+   momP==null?'\u2014':(momP>=0?'\u25b2 +':'\u25bc ')+momP.toFixed(1)+'% vs '+(pk?mName(pk):'prev'),momP==null?'':(momP>=0?'up':'dn'))+
+  card('OP Visits (MTD)',opTot.toLocaleString('en-IN'),'~'+(opTot/dC).toFixed(0)+' / day','')+
+  card('Active Doctors',active,(pk&&p.doctors)? Object.values(p.doctors).filter(v=>v.rev>0).length+' in '+mName(pk):'','');
+ // daily chart with month toggle
+ let calChart=null;
+ window.drawCal=function(mk){
+  const h=D.history[mk], cc=h.calicut;
+  const nDays=daysIn(mk,h);
+  const [y,m]=mk.split('-').map(Number);
+  const days=[...Array(nDays).keys()].map(i=>i+1);
+  const vals=days.map(d=>{
+   const iso=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+   return (cc.daily[iso]||0)/L;});
+  const dows=days.map(d=>'SMTWTFS'[new Date(y,m-1,d).getDay()]);
+  if(calChart)calChart.destroy();
+  calChart=new Chart(document.getElementById('calDaily'),{type:'bar',
+   data:{labels:days.map((d,i)=>d+' '+dows[i]),datasets:[
+    {label:'Gross revenue (\u20b9 L)',data:vals,backgroundColor:days.map((d,i)=>dows[i]==='S'?'rgba(139,26,74,.35)':MAROON)}]},
+   options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},
+   scales:{x:{ticks:{font:{size:10}}},y:{title:{display:true,text:'\u20b9 Lakhs'}}}}});
+  document.querySelectorAll('#calbtns .mbtn').forEach(b=>b.classList.toggle('on',b.dataset.k===mk));
+ }
+ document.getElementById('calbtns').innerHTML=calM.map(k=>`<button class="mbtn" data-k="${k}" onclick="drawCal('${k}')">${k}</button>`).join('');
+ drawCal(ck);
+ document.getElementById('caldnote').textContent='From the Daily MIS "Input Calicut" sheet. Sundays (maroon-light) \u2014 clinic closed or skeleton OP; zero posting is normal.';
+ // service mix
+ const sv=Object.entries(c.serv||{}).sort((a,b)=>b[1]-a[1]);
+ document.getElementById('calsnote').textContent=mName(ck)+' MTD, \u20b9 Lakhs by collection head.';
+ new Chart(document.getElementById('calServ'),{type:'doughnut',
+  data:{labels:sv.map(x=>x[0]),datasets:[{data:sv.map(x=>x[1]/L),
+   backgroundColor:[MAROON,BLUE,'#c8952b','#1a7f4e',GRAY,LT,'#5a6875','#d4dbe3']}]},
+  options:{plugins:{legend:{position:'bottom',labels:{boxWidth:11,font:{size:10.5}}},
+   tooltip:{callbacks:{label:t=>t.label+': \u20b9'+t.parsed.toFixed(1)+' L'}}}}});
+ // doctor league
+ const docsP=(p&&p.doctors)||{};
+ let rows=Object.entries(c.doctors||{}).map(([n,v])=>{
+  const pv=docsP[n]||{};
+  const rrC=(v.rev||0)/dC, rrP=pv.rev? pv.rev/dP:0;
+  return {doc:tc(n),dept:tc(v.dept||''),rev:(v.rev||0)/L,rr:rrC/L,opv:v.opv||0,
+   revP:(pv.rev||0)/L,mom:rrP?(rrC/rrP-1)*100:null,share:mtdRev? (v.rev||0)/mtdRev*100:null};})
+  .filter(r=>r.rev>0.005||r.opv>0).sort((a,b)=>b.rev-a.rev).slice(0,25);
+ const momCell=v=>v==null?'\u2014':`<span class="tag ${v>=10?'g':v<=-10?'r':'y'}">${v>=0?'+':''}${v.toFixed(0)}%</span>`;
+ document.querySelector('#calTable tbody').innerHTML=rows.map(r=>
+  `<tr><td class="doc" title="${r.doc}">${r.doc}</td><td class="doc">${r.dept}</td>`+
+  `<td class="r"><b>${r.rev.toFixed(2)}</b></td><td class="r">${r.rr.toFixed(3)}</td>`+
+  `<td class="r">${r.opv||'\u2014'}</td><td class="r">${r.revP?r.revP.toFixed(2):'\u2014'}</td>`+
+  `<td class="r">${momCell(r.mom)}</td><td class="r">${r.share==null?'\u2014':r.share.toFixed(1)+'%'}</td></tr>`).join('');
+ document.getElementById('callnote').innerHTML=
+  `Doctor-attributed gross revenue and OP visits at the Calicut medical centre, <b>${mName(ck)}</b> (${dC} days elapsed)`+
+  (pk?` vs <b>${mName(pk)}</b> (${dP} days) on \u20b9/day run-rate.`:'.')+' Top 25 by revenue.';
+ // append a Calicut line to the daily commentary
+ const dKeys=Object.keys(c.daily).sort();
+ if(dKeys.length){
+  const lastD=dKeys[dKeys.length-1], v=c.daily[lastD];
+  const el=document.getElementById('cmtext');
+  if(el&&el.innerHTML) el.innerHTML+=` At the <b>Calicut satellite</b>, ${new Date(lastD+'T12:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'long'})} posted \u20b9${(v/L).toFixed(1)} L, taking its MTD to \u20b9${(mtdRev/L).toFixed(1)} L${share!=null?' ('+share.toFixed(1)+'% of unit gross)':''}.`;
+ }
 })();
 </script></body></html>
 """
