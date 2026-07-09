@@ -273,6 +273,46 @@ def parse_mom_fy(ws):
                     out[m][key] = float(r[j])
     return {m: v for m, v in out.items() if v}
 
+def parse_pnl_summ(ws):
+    """Monthly management P&L ('12P+L Summ') -> (month 'YYYY-MM', {line: {a,aPct,b,bPct,var}}).
+    Columns: E(4)=label, G(6)=Actual, H(7)=Actual%, I(8)=Budget, J(9)=Budget%, K(10)=Variance.
+    Real audited close per month; one month per monthly MIS file."""
+    rows = list(ws.iter_rows(values_only=True, max_col=12))
+    # month = first datetime found in the header band
+    mkey = None
+    for r in rows[:12]:
+        for c in r:
+            if isinstance(c, (datetime.datetime, datetime.date)):
+                mkey = c.strftime("%Y-%m"); break
+        if mkey: break
+    # ordered (key, label-prefix) — first numeric-actual match wins
+    specs = [("revenue", "Total Revenue"), ("directCost", "Direct Costs"),
+             ("contribution", "Net Revenue"), ("staff", "Staff Costs"),
+             ("overheads", "Overheads"), ("badDebt", "Provision for Bad"),
+             ("totalExp", "Total Expenses"), ("ebitda", "Operating Profit"),
+             ("nonOp", "Non-Operating"), ("netOp", "Net Operating Profit"),
+             ("finance", "Finance Charges"), ("cashProfit", "Cash Profit"),
+             ("depreciation", "Depreciation"), ("net", "Net Profit")]
+    out = {}
+    for key, pref in specs:
+        for r in rows:
+            lbl = str(r[4]).strip() if len(r) > 4 and r[4] else ""
+            if not lbl.startswith(pref):
+                continue
+            if pref in ("Finance Charges", "Depreciation") and "Right" in lbl:
+                continue
+            if pref == "Net Profit" and "AFS" in lbl:
+                continue
+            a = num(r[6]) if len(r) > 6 else 0
+            b = num(r[8]) if len(r) > 8 else 0
+            if a == 0 and b == 0 and key not in ("nonOp", "finance", "badDebt"):
+                continue
+            out[key] = {"a": a, "aPct": num(r[7]) if len(r) > 7 else 0,
+                        "b": b, "bPct": num(r[9]) if len(r) > 9 else 0,
+                        "var": num(r[10]) if len(r) > 10 else 0}
+            break
+    return mkey, out
+
 # ---------------------------------------------------------------------- main
 def main():
     folder = sys.argv[1] if len(sys.argv) > 1 else \
@@ -428,6 +468,28 @@ def main():
     json.dump(history, open(hist_path, "w"))
     print("History months:", sorted(history))
 
+    # ---- Monthly management P&L (audited close) from 'MIS LHRC_<Month>.xlsx' ----
+    pnl_path = os.path.join(tools, "pnl_history.json")
+    pnl_hist = {}
+    if os.path.exists(pnl_path):
+        try: pnl_hist = json.load(open(pnl_path))
+        except Exception: pnl_hist = {}
+    for f in collect_files(folder, "MIS LHRC_*.xlsx"):
+        try:
+            w = openpyxl.load_workbook(f, read_only=True, data_only=True)
+        except Exception as e:
+            print("  skip P&L", os.path.basename(f), e); continue
+        sn = next((s for s in w.sheetnames if "P+L Summ" in s or "P&L Summ" in s), None)
+        if sn:
+            mkey, pnl = parse_pnl_summ(w[sn])
+            if mkey and pnl.get("revenue"):
+                pnl["_src"] = os.path.basename(f)
+                pnl_hist[mkey] = pnl
+                print("  Parsed P&L", mkey, "from", os.path.basename(f))
+        w.close()
+    json.dump(pnl_hist, open(pnl_path, "w"))
+    print("P&L months:", sorted(k for k in pnl_hist))
+
     # discharge aggregates per doctor + overall
     dis_by_doc, status_mix, payer_mix = {}, {}, {}
     for rec in discharges:
@@ -452,6 +514,8 @@ def main():
         docTypeMix=doc_type_mix, opAgg=op_agg,
         disDates=sorted({r["date"] for r in discharges}),
         nDischarges=len(discharges),
+        pnl=pnl_hist,
+        pnlLatest=(sorted(k for k in pnl_hist) or [None])[-1],
     )
     out = os.path.join(folder, "LHRC_Revenue_Dashboard.html")
     open(out, "w", encoding="utf-8").write(TEMPLATE.replace("__DATA__", json.dumps(data)))
@@ -495,11 +559,29 @@ td.doc{max-width:190px;overflow:hidden;text-overflow:ellipsis}
 .tag.g{background:rgba(26,127,78,.12);color:var(--good)}.tag.r{background:rgba(192,57,43,.1);color:var(--bad)}.tag.y{background:rgba(127,140,155,.15);color:#5a6875}
 footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 .scroll{overflow-x:auto}
+.tabbar{background:#fff;border-bottom:2px solid #e3e8ee;box-shadow:0 1px 3px rgba(36,51,66,.05)}
+.tabs{max-width:1320px;margin:0 auto;padding:0 24px;display:flex;gap:4px}
+.tab{padding:13px 22px;font-size:14px;font-weight:600;color:var(--gray);cursor:pointer;border:none;background:none;border-bottom:3px solid transparent;margin-bottom:-2px;transition:color .15s}
+.tab:hover{color:var(--blue)}
+.tab.on{color:var(--blue);border-bottom-color:var(--blue)}
+.pane{display:none}.pane.on{display:block;animation:fade .25s}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.banner{background:rgba(43,124,190,.07);border:1px solid rgba(43,124,190,.2);border-radius:8px;padding:10px 14px;font-size:12px;color:#3a4a5a;margin-bottom:18px;line-height:1.55}
+.banner b{color:var(--maroon)}
+#pnlTable td.lbl0{font-weight:650;color:#243342}
+#pnlTable tr.sub td{color:var(--gray);padding-left:20px}
+#pnlTable tr.tot td{border-top:2px solid #d4dbe3;font-weight:650;background:rgba(43,124,190,.04)}
+#pnlTable tr.grand td{border-top:2px solid var(--maroon);font-weight:700;background:rgba(139,26,74,.05)}
 </style></head><body>
 <header><div><h1>VPS Lakeshore · Daily Revenue Dashboard</h1>
 <div class="sub">Lakeshore Hospital &amp; Research Centre Ltd, Kochi · Global Lifecare</div></div>
 <div class="sub" id="asof"></div></header>
+<div class="tabbar"><div class="tabs">
+<button class="tab on" data-pane="rev">Daily Revenue &amp; Operations</button>
+<button class="tab" data-pane="pnl">P&amp;L &amp; Cost Analysis</button>
+</div></div>
 <div class="wrap">
+<div id="pane-rev" class="pane on">
 <div class="cards" id="cards"></div>
 
 <div class="panel"><h2>Daily Commentary</h2>
@@ -590,6 +672,44 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 <th class="r">OP visits</th><th class="r">Rev prev (₹L)</th><th class="r">Δ run-rate</th><th class="r">Share</th>
 </tr></thead><tbody></tbody></table></div></div>
 </div>
+
+</div><!-- /pane-rev -->
+
+<div id="pane-pnl" class="pane">
+<div class="banner" id="pnlbanner"></div>
+<div class="cards" id="pnlcards"></div>
+
+<div class="panel"><h2>P&amp;L Commentary — <span id="pnlmlbl"></span></h2>
+<div class="note" id="pnlcmnote"></div>
+<div id="pnlcmtext" style="font-size:13px;line-height:1.7;max-width:1000px"></div></div>
+
+<div class="panel"><h2>P&amp;L Waterfall — Revenue to Net Profit</h2>
+<div class="note">₹ Cr. Blue = revenue &amp; profit subtotals; red = cost deductions; green = net profit. Hover for values.</div>
+<canvas id="wfChart" style="max-height:380px"></canvas></div>
+
+<div class="grid">
+<div class="panel"><h2>Cost Drivers — % of Revenue: Actual vs Budget</h2>
+<div class="note">Each cost line as a share of revenue. Bars over budget (dotted) are adverse.</div>
+<canvas id="drvChart"></canvas></div>
+<div class="panel"><h2>Cost Mix — Share of Total Cost</h2>
+<div class="note" id="mixnote"></div><canvas id="mixChart" style="max-height:330px"></canvas></div>
+</div>
+
+<div class="panel"><h2>Profit &amp; Loss Statement — <span id="pnlmlbl2"></span></h2>
+<div class="note">Audited monthly close. Variance is favourable (green) when actual beats budget — lower cost or higher revenue/profit. All figures ₹ Cr.</div>
+<div class="scroll"><table id="pnlTable"><thead><tr>
+<th>Particulars</th><th class="r">Actual ₹Cr</th><th class="r">% Rev</th>
+<th class="r">Budget ₹Cr</th><th class="r">% Rev</th><th class="r">Variance ₹Cr</th><th>F/A</th>
+</tr></thead><tbody></tbody></table></div></div>
+
+<div class="grid">
+<div class="panel"><h2>Monthly Gross Revenue — FY 26-27 vs Budget</h2>
+<div class="note">₹ Cr per month. Bars = actual gross revenue (flash); dotted line = budget. Latest month is MTD.</div>
+<canvas id="revTrend"></canvas></div>
+<div class="panel"><h2>Profitability Trend — Closed Months</h2>
+<div class="note" id="mgnnote"></div><canvas id="marginTrend"></canvas></div>
+</div>
+</div><!-- /pane-pnl -->
 
 <footer id="foot"></footer>
 </div>
@@ -1040,6 +1160,136 @@ document.getElementById('foot').innerHTML='<b>Files parsed:</b> '+D.filesParsed.
   if(el&&el.innerHTML) el.innerHTML+=` At the <b>Calicut satellite</b>, ${new Date(lastD+'T12:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'long'})} posted \u20b9${(v/L).toFixed(1)} L, taking its MTD to \u20b9${(mtdRev/L).toFixed(1)} L${share!=null?' ('+share.toFixed(1)+'% of unit gross)':''}.`;
  }
 })();
+
+// ==================== TAB SWITCHING ====================
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.pane').forEach(x=>x.classList.remove('on'));
+  t.classList.add('on');
+  document.getElementById('pane-'+t.dataset.pane).classList.add('on');
+  if(t.dataset.pane==='pnl') initPnl();
+}));
+
+// ==================== P&L & COST ANALYSIS TAB ====================
+const RED='#c0392b', GREEN='#1a7f4e', AMBER='#c8952b';
+const crc=v=>'₹'+(v/CR).toFixed(2)+' Cr';
+let pnlBuilt=false;
+function initPnl(){
+ if(pnlBuilt) return; pnlBuilt=true;
+ const P=D.pnl||{}, keys=Object.keys(P).sort(), mk=D.pnlLatest;
+ const mName2=k=>new Date(k+'-01T12:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+ // ---- Monthly gross-revenue trend (always available, from year tables) ----
+ const rlabels=mwd.map(m=>m.month.slice(0,3));
+ new Chart(document.getElementById('revTrend'),{data:{labels:rlabels,datasets:[
+   {type:'bar',label:'Actual gross ₹Cr',data:mwd.map(m=>m.revTot/CR),backgroundColor:BLUE,borderRadius:4},
+   {type:'line',label:'Budget ₹Cr',data:mwd.map(m=>m.budTot/CR),borderColor:MAROON,borderDash:[5,4],borderWidth:2,pointRadius:0,fill:false}
+ ]},options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},scales:{y:{title:{display:true,text:'₹ Cr'}}}}});
+
+ if(!mk||!P[mk]){
+   document.getElementById('pnlbanner').innerHTML='No audited monthly P&amp;L close found yet. Drop a monthly <b>MIS LHRC_&lt;Month&gt;.xlsx</b> file into the folder and rebuild — this tab will populate the full cost deep-dive and fill the profitability trend month by month.';
+   document.getElementById('mgnnote').textContent='Awaiting monthly close files.';
+   return;
+ }
+ const p=P[mk], ml=mName2(mk);
+ document.getElementById('pnlmlbl').textContent=ml;
+ document.getElementById('pnlmlbl2').textContent=ml;
+ document.getElementById('pnlbanner').innerHTML=
+   'Cost deep-dive is built from the <b>audited monthly management P&amp;L</b> (latest close: <b>'+ml+'</b>). '+
+   'The revenue trend above uses gross revenue from the daily flash (all FY 26-27 months). '+
+   'As each monthly close file is added, the statement and profitability trend extend automatically. '+
+   'Source: <span style="color:var(--gray)">'+(p._src||'')+'</span>';
+
+ // ---- KPI cards ----
+ const dv=(v)=>{const s=(v>=0?'+':'')+ (v/CR).toFixed(2)+' Cr'; return s;};
+ const cc=[
+   ['Total Revenue',crc(p.revenue.a),dv(p.revenue.var)+' vs bud',''],
+   ['EBITDA',crc(p.ebitda.a)+' · '+p.ebitda.aPct.toFixed(1)+'%',dv(p.ebitda.var)+' vs bud','m'],
+   ['Net Profit',crc(p.net.a)+' · '+p.net.aPct.toFixed(1)+'%',dv(p.net.var)+' vs bud','m'],
+   ['Direct Cost (Consumables)',p.directCost.aPct.toFixed(1)+'% of rev','bud '+p.directCost.bPct.toFixed(1)+'%',''],
+   ['Staff Cost',p.staff.aPct.toFixed(1)+'% of rev','bud '+p.staff.bPct.toFixed(1)+'%',''],
+   ['Overheads',p.overheads.aPct.toFixed(1)+'% of rev','bud '+p.overheads.bPct.toFixed(1)+'%','']
+ ];
+ document.getElementById('pnlcards').innerHTML=cc.map(([l,v,d,cls])=>{
+   const up=/^\+/.test(d); const cl=/vs bud/.test(d)?(up?'up':(/^-/.test(d)?'dn':'')):'';
+   return '<div class="card '+cls+'"><div class="lbl">'+l+'</div><div class="val">'+v+'</div><div class="delta '+cl+'">'+d+'</div></div>';
+ }).join('');
+
+ // ---- Waterfall ----
+ const cr=v=>v/CR;
+ let run=0, labels=[], ranges=[], colors=[];
+ const push=(lbl,rng,col)=>{labels.push(lbl);ranges.push(rng);colors.push(col);};
+ push('Revenue',[0,cr(p.revenue.a)],BLUE); run=p.revenue.a;
+ const decs=[['Direct Cost',p.directCost.a],['Staff Cost',p.staff.a],['Overheads',p.overheads.a],['Bad Debts',p.badDebt.a]];
+ decs.forEach(([l,v])=>{push(l,[cr(run-v),cr(run)],RED); run-=v;});
+ push('EBITDA',[0,cr(p.ebitda.a)],'#1b5e94'); run=p.ebitda.a;
+ [['Depreciation',p.depreciation.a],['Finance',p.finance.a]].forEach(([l,v])=>{push(l,[cr(run-v),cr(run)],RED); run-=v;});
+ const adj=p.net.a-run;
+ if(Math.abs(adj)>2e5){push('Other/Non-Op',[cr(run),cr(run+adj)],adj>=0?GREEN:RED); run+=adj;}
+ push('Net Profit',[0,cr(p.net.a)],GREEN);
+ new Chart(document.getElementById('wfChart'),{type:'bar',data:{labels,datasets:[{data:ranges,backgroundColor:colors,borderRadius:3}]},
+   options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>{const r=c.raw;return '₹'+(Math.abs(r[1]-r[0])).toFixed(2)+' Cr';}}}},
+     scales:{y:{title:{display:true,text:'₹ Cr'}},x:{ticks:{font:{size:10},maxRotation:45,minRotation:30}}}}});
+
+ // ---- Cost driver: actual% vs budget% of revenue ----
+ const drv=[['Direct Cost',p.directCost],['Staff',p.staff],['Overheads',p.overheads],['Bad Debts',p.badDebt],['Depreciation',p.depreciation],['Finance',p.finance]];
+ new Chart(document.getElementById('drvChart'),{type:'bar',data:{labels:drv.map(d=>d[0]),datasets:[
+   {label:'Actual % rev',data:drv.map(d=>d[1].aPct),backgroundColor:BLUE,borderRadius:3},
+   {label:'Budget % rev',data:drv.map(d=>d[1].bPct),backgroundColor:'rgba(139,26,74,.35)',borderRadius:3}
+ ]},options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},scales:{y:{title:{display:true,text:'% of revenue'}}}}});
+
+ // ---- Cost mix doughnut ----
+ const mix=[['Direct Cost',p.directCost.a],['Staff',p.staff.a],['Overheads',p.overheads.a],['Depreciation',p.depreciation.a],['Bad Debts',p.badDebt.a],['Finance',p.finance.a]].filter(m=>m[1]>0);
+ const mixTot=mix.reduce((s,m)=>s+m[1],0);
+ new Chart(document.getElementById('mixChart'),{type:'doughnut',data:{labels:mix.map(m=>m[0]),datasets:[{data:mix.map(m=>m[1]/CR),
+   backgroundColor:[BLUE,MAROON,AMBER,GRAY,'#7aa9d0','#d08a9a']}]},options:{plugins:{legend:{position:'right',labels:{boxWidth:12,font:{size:11}}}}}});
+ document.getElementById('mixnote').textContent='Total cost ₹'+(mixTot/CR).toFixed(2)+' Cr in '+ml+'. Consumables + staff dominate the base.';
+
+ // ---- P&L statement table ----
+ const fa=v=>v>=0?'<span class="tag g">Fav '+(v>=0?'+':'')+(v/CR).toFixed(2)+'</span>':'<span class="tag r">Adv '+(v/CR).toFixed(2)+'</span>';
+ const row=(lbl,k,cls)=>{const x=p[k]; if(!x) return '';
+   return '<tr class="'+(cls||'')+'"><td class="'+(cls==='sub'?'':'lbl0')+'">'+lbl+'</td>'+
+     '<td class="r">'+(x.a/CR).toFixed(2)+'</td><td class="r">'+x.aPct.toFixed(1)+'%</td>'+
+     '<td class="r">'+(x.b/CR).toFixed(2)+'</td><td class="r">'+x.bPct.toFixed(1)+'%</td>'+
+     '<td class="r">'+(x.var>=0?'+':'')+(x.var/CR).toFixed(2)+'</td><td>'+fa(x.var)+'</td></tr>';};
+ document.querySelector('#pnlTable tbody').innerHTML=
+   row('Total Revenue','revenue','tot')+
+   row('Direct Cost — Consumables','directCost','sub')+
+   row('Contribution / Net Revenue','contribution','tot')+
+   row('Staff Cost','staff','sub')+
+   row('Overheads','overheads','sub')+
+   row('Provision for Bad Debts','badDebt','sub')+
+   row('EBITDA','ebitda','tot')+
+   row('Depreciation','depreciation','sub')+
+   row('Finance Charges','finance','sub')+
+   row('Net Profit','net','grand');
+
+ // ---- Profitability trend across closed months ----
+ const cm=keys.filter(k=>P[k]&&P[k].revenue);
+ new Chart(document.getElementById('marginTrend'),{data:{labels:cm.map(mName2),datasets:[
+   {type:'bar',label:'Revenue ₹Cr',data:cm.map(k=>P[k].revenue.a/CR),backgroundColor:'rgba(43,124,190,.75)',borderRadius:4,yAxisID:'y'},
+   {type:'line',label:'EBITDA %',data:cm.map(k=>P[k].ebitda.aPct),borderColor:MAROON,borderWidth:2,pointRadius:3,yAxisID:'y1'},
+   {type:'line',label:'Net %',data:cm.map(k=>P[k].net.aPct),borderColor:GREEN,borderWidth:2,borderDash:[5,4],pointRadius:3,yAxisID:'y1'}
+ ]},options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},scales:{
+   y:{position:'left',title:{display:true,text:'₹ Cr'}},
+   y1:{position:'right',title:{display:true,text:'% of revenue'},grid:{drawOnChartArea:false}}}}});
+ document.getElementById('mgnnote').innerHTML=cm.length>1?
+   'Revenue (bars) with EBITDA and Net margin (lines) across '+cm.length+' closed months.':
+   'Only <b>'+ml+'</b> is closed so far — the trend fills in as each monthly MIS close is added.';
+
+ // ---- Commentary ----
+ const bigCost=[['Consumables',p.directCost],['Staff',p.staff],['Overheads',p.overheads]]
+   .map(([n,x])=>({n,v:x.var,pa:x.aPct,pb:x.bPct})).sort((a,b)=>a.v-b.v);
+ const worst=bigCost[0], best=[...bigCost].sort((a,b)=>b.v-a.v)[0];
+ document.getElementById('pnlcmnote').textContent='Auto-generated from the '+ml+' management P&L close.';
+ document.getElementById('pnlcmtext').innerHTML=
+   '<b>'+ml+'</b> closed at revenue of <b>'+crc(p.revenue.a)+'</b>, '+
+   (p.revenue.var>=0?'ahead of':'behind')+' budget by ₹'+Math.abs(p.revenue.var/CR).toFixed(2)+' Cr. '+
+   'EBITDA was <b>'+crc(p.ebitda.a)+' ('+p.ebitda.aPct.toFixed(1)+'% margin)</b> versus a '+p.ebitda.bPct.toFixed(1)+'% plan, and net profit <b>'+crc(p.net.a)+' ('+p.net.aPct.toFixed(1)+'%)</b>. '+
+   'The largest cost driver is <b>consumables at '+p.directCost.aPct.toFixed(1)+'% of revenue</b> (budget '+p.directCost.bPct.toFixed(1)+'%), followed by staff at '+p.staff.aPct.toFixed(1)+'%. '+
+   'The biggest adverse variance came from <b>'+worst.n+'</b> ('+worst.pa.toFixed(1)+'% vs '+worst.pb.toFixed(1)+'% budget, ₹'+Math.abs(worst.v/CR).toFixed(2)+' Cr over), '+
+   'while <b>'+best.n+'</b> ran favourably ('+best.pa.toFixed(1)+'% vs '+best.pb.toFixed(1)+'% budget, ₹'+Math.abs(best.v/CR).toFixed(2)+' Cr saved). '+
+   'Depreciation ₹'+(p.depreciation.a/CR).toFixed(2)+' Cr and finance charges ₹'+(p.finance.a/CR).toFixed(2)+' Cr bridge EBITDA to net profit.';
+}
 </script></body></html>
 """
 
