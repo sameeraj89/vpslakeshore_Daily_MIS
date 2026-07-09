@@ -388,6 +388,57 @@ def parse_pl_consol(ws):
             break
     return cm_month, {"lines": lines}
 
+def _tb_month(cell):
+    """TB month-column header -> 'YYYY-MM' ('Apr_26','May-26','jun 26','Jan-27')."""
+    if isinstance(cell, (datetime.datetime, datetime.date)):
+        return cell.strftime("%Y-%m")
+    s = str(cell).strip().lower()
+    m = re.match(r'([a-z]{3,})[\s_\-]*(\d{2,4})$', s)
+    if m and m.group(1)[:3] in _MONTHS3:
+        yr = int(m.group(2)); yr += 2000 if yr < 100 else 0
+        return f"{yr}-{_MONTHS3[m.group(1)[:3]]:02d}"
+    return None
+
+# account-name fragments that mark a NON-recurring material entry (one-off).
+# ('PROVISION FOR' not bare 'PROVISION', to avoid 'PURCHASE - PROVISIONS & STORES';
+#  actual PURCHASE lines are always recurring and excluded below.)
+_TB_ONEOFF = ("PROVISION FOR", "GST", "REVERSAL", "WRITE OFF", "WRITE-OFF",
+              "PRIOR PERIOD", "ROUND OFF")
+
+def parse_tb_material(wb):
+    """From TB_Kochi/TB_Calicut/TB_FNB, return {ym: {'total':INR,'oneoff':INR}}
+    for every current-FY month column present. Latest P&L file carries all months,
+    so this yields the full monthly material series for the bridge."""
+    out = {}
+    for sh in wb.sheetnames:
+        if not sh.strip().lower().startswith("tb_"):
+            continue
+        rows = list(wb[sh].iter_rows(values_only=True))
+        hr = next((i for i, r in enumerate(rows[:6])
+                   if any(isinstance(c, str) and c.strip().lower() == "mis_group1" for c in r)), None)
+        if hr is None:
+            continue
+        low = [str(c).strip().lower() if c else "" for c in rows[hr]]
+        gi = low.index("mis_group1"); di = low.index("description") if "description" in low else 1
+        ytd_max = max([j for j, h in enumerate(low) if "ytd" in h] or [gi])
+        mcols = {j: _tb_month(rows[hr][j]) for j in range(ytd_max + 1, len(rows[hr]))
+                 if _tb_month(rows[hr][j])}
+        for r in rows[hr + 1:]:
+            grp = str(r[gi]).strip() if len(r) > gi and r[gi] else ""
+            if grp != "Material Cost":
+                continue
+            acc = str(r[di]).strip().upper() if len(r) > di and r[di] else ""
+            one = (not acc.startswith("PURCHASE")) and any(k in acc for k in _TB_ONEOFF)
+            for j, ym in mcols.items():
+                v = num(r[j]) if j < len(r) else 0
+                if not v:
+                    continue
+                d = out.setdefault(ym, {"total": 0.0, "oneoff": 0.0})
+                d["total"] += v
+                if one:
+                    d["oneoff"] += v
+    return out
+
 # ---------------------------------------------------------------------- main
 def main():
     folder = sys.argv[1] if len(sys.argv) > 1 else \
@@ -564,6 +615,21 @@ def main():
     except Exception as e: print("  (pnl_history not written:", e, ")")
     print("P&L months:", sorted(k for k in pnl_hist))
 
+    # ---- Material cost bridge: monthly material total + one-off, from latest file's TB ----
+    mat_bridge = {}
+    if pnl_hist:
+        latest_src = pnl_hist[sorted(pnl_hist)[-1]].get("_src")
+        path = next((f for f in collect_files(folder, "Profit_and_Loss_Statement*.xlsx")
+                     if os.path.basename(f) == latest_src), None)
+        if path:
+            try:
+                w = openpyxl.load_workbook(path, read_only=True, data_only=True)
+                mat_bridge = parse_tb_material(w); w.close()
+                print("Material bridge months:", sorted(mat_bridge),
+                      "| latest one-off ₹%.2f Cr" % ((mat_bridge.get(sorted(mat_bridge)[-1], {}).get("oneoff", 0)/1e7) if mat_bridge else 0))
+            except Exception as e:
+                print("  (material bridge skipped:", e, ")")
+
     # discharge aggregates per doctor + overall
     dis_by_doc, status_mix, payer_mix = {}, {}, {}
     for rec in discharges:
@@ -590,6 +656,7 @@ def main():
         nDischarges=len(discharges),
         pnl=pnl_hist,
         pnlLatest=(sorted(k for k in pnl_hist) or [None])[-1],
+        matBridge=mat_bridge,
     )
     out = os.path.join(folder, "LHRC_Revenue_Dashboard.html")
     open(out, "w", encoding="utf-8").write(TEMPLATE.replace("__DATA__", json.dumps(data)))
@@ -768,6 +835,10 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 <div class="panel"><h2>Cost Mix — Share of Total Cost</h2>
 <div class="note" id="mixnote"></div><canvas id="mixChart" style="max-height:330px"></canvas></div>
 </div>
+
+<div class="panel"><h2>Material Cost Bridge — <span id="mbSpan"></span></h2>
+<div class="note" id="mbnote"></div>
+<canvas id="mbChart" style="max-height:360px"></canvas></div>
 
 <div class="panel"><h2>Profit &amp; Loss Statement — <span id="pnlmlbl2"></span></h2>
 <div class="note">Audited monthly close. Variance is favourable (green) when actual beats budget — lower cost or higher revenue/profit. All figures ₹ Cr.</div>
@@ -1311,6 +1382,32 @@ function initPnl(){
    backgroundColor:[BLUE,MAROON,AMBER,GRAY,'#7aa9d0','#d08a9a','#b9c2cc']}]},
    options:{plugins:{legend:{position:'right',labels:{boxWidth:11,font:{size:10.5}}}}}});
  document.getElementById('mixnote').textContent='Total operating cost ₹'+(texp.a/CR).toFixed(2)+' Cr in '+ml+'. Material + manpower dominate the base.';
+
+ // Material Cost Bridge — volume vs mix/rate vs one-off (auto-updates each month)
+ (function(){
+  const MB=D.matBridge||{}, mbM=Object.keys(MB).sort().filter(m=>P[m]&&P[m].lines);
+  const nt=document.getElementById('mbnote');
+  if(mbM.length<2){ if(nt) nt.textContent='Add a second month of P&L files to build the bridge.'; return; }
+  const base=mbM[0], last=mbM[mbM.length-1];
+  const rv=k=>{var x=P[k].lines.find(z=>z.label==='Total Revenue'); return x?x.a:0;};
+  const bT=MB[base].total,bO=MB[base].oneoff,lT=MB[last].total,lO=MB[last].oneoff;
+  const revG=rv(base)>0?(rv(last)/rv(base)-1):0;
+  const recBase=bT-bO, volume=recBase*revG, oneoff=lO-bO, mix=(lT-lO)-(recBase)-volume;
+  const cr=v=>v/CR;
+  let run=bT,labels=[],ranges=[],colors=[];
+  const pu=(l,rng,c)=>{labels.push(l);ranges.push(rng);colors.push(c);};
+  pu(mShort(base),[0,cr(bT)],BLUE);
+  [['Volume','#e34948',volume],['Mix / rate','#eb6834',mix],['One-off','#eda100',oneoff]].forEach(function(x){
+    pu(x[0],[cr(run),cr(run+x[2])],x[1]); run+=x[2];});
+  pu(mShort(last),[0,cr(lT)],'#1b5e94');
+  new Chart(document.getElementById('mbChart'),{type:'bar',data:{labels:labels,datasets:[{data:ranges,backgroundColor:colors,borderRadius:4}]},
+   options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>{var r=c.raw,t=(c.dataIndex===0||c.dataIndex===labels.length-1);return (t?'Total ₹':'Δ ₹')+((r[1]-r[0])>=0?'+':'')+(r[1]-r[0]).toFixed(2)+' Cr';}}}},
+    scales:{y:{title:{display:true,text:'₹ Cr'}},x:{ticks:{font:{size:10.5},maxRotation:30,minRotation:0}}}}});
+  document.getElementById('mbSpan').textContent=mName2(base)+' → '+mName2(last);
+  nt.innerHTML='Material cost decomposed vs '+mName2(base)+': <b>Volume</b> (base material × '+(revG*100).toFixed(0)+'% revenue growth) ₹'+dv(volume)+', '+
+    '<b>Mix / rate</b> (intensity beyond volume) ₹'+dv(mix)+', <b>One-off</b> (GST/provisions, auto-flagged) ₹'+dv(oneoff)+'. '+
+    'Ex the one-off, material is '+(((lT-lO)/rv(last))*100).toFixed(1)+'% of revenue vs '+((bT-bO)/rv(base)*100).toFixed(1)+'% in '+mShort(base)+'.';
+ })();
 
  // P&L statement table
  const fav=l=>{var v=l.a-l.b, good=(l.grp==='cost')?v<=0:v>=0;
