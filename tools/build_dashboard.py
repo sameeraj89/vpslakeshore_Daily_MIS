@@ -14,8 +14,23 @@ months survive even if the source files are removed.
 
 Usage:  python3 build_dashboard.py [folder]
 """
-import sys, os, re, json, glob, datetime
+import sys, os, re, json, glob, datetime, fnmatch
 import openpyxl
+
+# Collect files matching `pattern` under `root`, recursing into active month
+# subfolders (July/, June/, ...) but SKIPPING the historical archive and the
+# tools dir so we don't sweep in years of old MIS files.
+_SKIP_DIRS = {"Base Reports Daily & Monthly MIS", "_dashboard_tools",
+              "dailyrevenueflashsourcereports"}
+def collect_files(root, pattern):
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames
+                       if d not in _SKIP_DIRS and not d.startswith('.')]
+        for fn in filenames:
+            if fnmatch.fnmatch(fn, pattern):
+                out.append(os.path.join(dirpath, fn))
+    return out
 
 FY_MONTHS = ["APRIL","MAY","JUNE","JULY","AUGUST","SEPTEMBER","OCTOBER",
              "NOVEMBER","DECEMBER","JANUARY","FEBRUARY","MARCH"]
@@ -272,7 +287,7 @@ def main():
 
     # ---- flash files ----
     by_date = {}
-    for f in glob.glob(os.path.join(folder, "Daily Revenue Flash_New_*.xlsx")):
+    for f in collect_files(folder, "Daily Revenue Flash_New_*.xlsx"):
         d = file_date(f)
         if d and (d not in by_date or os.path.getmtime(f) > os.path.getmtime(by_date[d])):
             by_date[d] = f
@@ -356,7 +371,7 @@ def main():
 
     # ---- Daily MIS files: doctor x month granularity ----
     mis_by_date = {}
-    for f in glob.glob(os.path.join(folder, "Daily MIS*.xlsx")):
+    for f in collect_files(folder, "Daily MIS*.xlsx"):
         d = file_date(f)
         if d and (d not in mis_by_date or os.path.getmtime(f) > os.path.getmtime(mis_by_date[d])):
             mis_by_date[d] = f
