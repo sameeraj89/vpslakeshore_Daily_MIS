@@ -936,12 +936,19 @@ let dailyChart=null;
 window.drawDaily=function(key){
  const rows=D.daily[key];
  if(dailyChart)dailyChart.destroy();
- dailyChart=new Chart(document.getElementById('dailyChart'),{data:{labels:rows.map(r=>r.date.slice(8)+' '+r.dow.slice(0,2)),datasets:[
+ const dailyTotals={id:'dailyTotals',afterDatasetsDraw(chart){
+  const y=chart.scales.y, meta=chart.getDatasetMeta(0), ctx=chart.ctx;
+  if(!meta||!meta.data)return;
+  ctx.save();ctx.font='700 9px system-ui,Arial';ctx.fillStyle='#33475b';ctx.textAlign='center';
+  meta.data.forEach((bar,i)=>{const t=(rows[i].revTot||0)/L; if(t<=0)return; ctx.fillText(t.toFixed(0),bar.x,y.getPixelForValue(t)-4);});
+  ctx.restore();
+ }};
+ dailyChart=new Chart(document.getElementById('dailyChart'),{plugins:[dailyTotals],data:{labels:rows.map(r=>r.date.slice(8)+' '+r.dow.slice(0,2)),datasets:[
   {type:'bar',label:'OP',data:rows.map(r=>r.revOP/L),backgroundColor:LT,stack:'a'},
   {type:'bar',label:'IP',data:rows.map(r=>r.revIP/L),backgroundColor:BLUE,stack:'a'},
   {type:'bar',label:'Pharmacy',data:rows.map(r=>r.revPH/L),backgroundColor:MAROON,stack:'a'},
   {type:'line',label:'Budget',data:rows.map(r=>r.budTot/L),borderColor:GRAY,borderDash:[5,4],pointRadius:0,tension:.2}]},
-  options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},
+  options:{layout:{padding:{top:16}},plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},
   scales:{x:{stacked:true,ticks:{font:{size:10}}},y:{stacked:true,title:{display:true,text:'₹ Lakhs'}}}}});
  document.querySelectorAll('.mbtn').forEach(b=>b.classList.toggle('on',b.dataset.k===key));
 }
