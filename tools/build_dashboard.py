@@ -14,23 +14,8 @@ months survive even if the source files are removed.
 
 Usage:  python3 build_dashboard.py [folder]
 """
-import sys, os, re, json, glob, datetime, fnmatch
+import sys, os, re, json, glob, datetime
 import openpyxl
-
-# Collect files matching `pattern` under `root`, recursing into active month
-# subfolders (July/, June/, ...) but SKIPPING the historical archive and the
-# tools dir so we don't sweep in years of old MIS files.
-_SKIP_DIRS = {"Base Reports Daily & Monthly MIS", "_dashboard_tools",
-              "dailyrevenueflashsourcereports"}
-def collect_files(root, pattern):
-    out = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames
-                       if d not in _SKIP_DIRS and not d.startswith('.')]
-        for fn in filenames:
-            if fnmatch.fnmatch(fn, pattern):
-                out.append(os.path.join(dirpath, fn))
-    return out
 
 FY_MONTHS = ["APRIL","MAY","JUNE","JULY","AUGUST","SEPTEMBER","OCTOBER",
              "NOVEMBER","DECEMBER","JANUARY","FEBRUARY","MARCH"]
@@ -221,36 +206,6 @@ def parse_doctor_day_matrix(ws, value_name):
                 dd[day_of[j]] = dd.get(day_of[j], 0) + num(r[j])
     return out, daily
 
-def parse_calicut_input(ws):
-    """'Input Calicut' (service group x day) -> ({service: month_total}, {iso_date: day_total})"""
-    rows = list(ws.iter_rows(values_only=True))
-    hrow, datecols = None, []
-    for i, r in enumerate(rows[:6]):
-        dc = [(j, c.date() if isinstance(c, datetime.datetime) else c)
-              for j, c in enumerate(r) if isinstance(c, (datetime.datetime, datetime.date))]
-        if len(dc) >= 5:
-            months = {}
-            for _, c in dc: months[(c.year, c.month)] = months.get((c.year, c.month), 0) + 1
-            dom = max(months, key=months.get)
-            seen = set()
-            for j, c in dc:
-                if (c.year, c.month) == dom and c not in seen:
-                    seen.add(c); datecols.append((j, c))
-            hrow = i; break
-    if hrow is None: return {}, {}
-    serv, daily = {}, {}
-    for r in rows[hrow + 1:]:
-        lbl = str(r[0]).strip() if r[0] else ""
-        if not lbl: continue
-        if norm(lbl) in ("GRAND TOTAL", "TOTAL"):
-            for j, c in datecols:
-                if j < len(r) and num(r[j]):
-                    daily[c.strftime("%Y-%m-%d")] = num(r[j])
-            break
-        tot = sum(num(r[j]) for j, _ in datecols if j < len(r))
-        if tot: serv[lbl] = serv.get(lbl, 0) + tot
-    return serv, daily
-
 def parse_mom_fy(ws):
     """'MoM FY 26-27' -> {month 'YYYY-MM': {bedCap, occDays, alos}}"""
     rows = list(ws.iter_rows(values_only=True, max_col=16))
@@ -273,172 +228,6 @@ def parse_mom_fy(ws):
                     out[m][key] = float(r[j])
     return {m: v for m, v in out.items() if v}
 
-def parse_pnl_summ(ws):
-    """Monthly management P&L ('12P+L Summ') -> (month 'YYYY-MM', {line: {a,aPct,b,bPct,var}}).
-    Columns: E(4)=label, G(6)=Actual, H(7)=Actual%, I(8)=Budget, J(9)=Budget%, K(10)=Variance.
-    Real audited close per month; one month per monthly MIS file."""
-    rows = list(ws.iter_rows(values_only=True, max_col=12))
-    # month = first datetime found in the header band
-    mkey = None
-    for r in rows[:12]:
-        for c in r:
-            if isinstance(c, (datetime.datetime, datetime.date)):
-                mkey = c.strftime("%Y-%m"); break
-        if mkey: break
-    # ordered (key, label-prefix) — first numeric-actual match wins
-    specs = [("revenue", "Total Revenue"), ("directCost", "Direct Costs"),
-             ("contribution", "Net Revenue"), ("staff", "Staff Costs"),
-             ("overheads", "Overheads"), ("badDebt", "Provision for Bad"),
-             ("totalExp", "Total Expenses"), ("ebitda", "Operating Profit"),
-             ("nonOp", "Non-Operating"), ("netOp", "Net Operating Profit"),
-             ("finance", "Finance Charges"), ("cashProfit", "Cash Profit"),
-             ("depreciation", "Depreciation"), ("net", "Net Profit")]
-    out = {}
-    for key, pref in specs:
-        for r in rows:
-            lbl = str(r[4]).strip() if len(r) > 4 and r[4] else ""
-            if not lbl.startswith(pref):
-                continue
-            if pref in ("Finance Charges", "Depreciation") and "Right" in lbl:
-                continue
-            if pref == "Net Profit" and "AFS" in lbl:
-                continue
-            a = num(r[6]) if len(r) > 6 else 0
-            b = num(r[8]) if len(r) > 8 else 0
-            if a == 0 and b == 0 and key not in ("nonOp", "finance", "badDebt"):
-                continue
-            out[key] = {"a": a, "aPct": num(r[7]) if len(r) > 7 else 0,
-                        "b": b, "bPct": num(r[9]) if len(r) > 9 else 0,
-                        "var": num(r[10]) if len(r) > 10 else 0}
-            break
-    return mkey, out
-
-_MONTHS3 = {m[:3].lower(): i for i, m in enumerate(
-    ["January","February","March","April","May","June","July","August",
-     "September","October","November","December"], 1)}
-
-def _pl_month(cell):
-    """Normalise a header cell to 'YYYY-MM' (handles dates and 'jun 26' text)."""
-    if isinstance(cell, (datetime.datetime, datetime.date)):
-        return cell.strftime("%Y-%m")
-    s = str(cell).strip().lower()
-    m = re.match(r'([a-z]{3,})[\s\-]*(\d{2,4})', s)
-    if m and m.group(1)[:3] in _MONTHS3:
-        yr = int(m.group(2)); yr += 2000 if yr < 100 else 0
-        return f"{yr}-{_MONTHS3[m.group(1)[:3]]:02d}"
-    m = re.match(r'(\d{4})-(\d{1,2})', s)
-    if m: return f"{int(m.group(1))}-{int(m.group(2)):02d}"
-    return None
-
-# (canonical label, lowercase startswith-prefix, group, is_total)
-PL_SPEC = [
-    ("IP Revenue","ip revenue","rev",False), ("IP Pharmacy","ip pharmacy","rev",False),
-    ("OP Revenue","op revenue","rev",False), ("OP Pharmacy","op pharmacy","rev",False),
-    ("Ayurveda","aurveda","rev",False), ("F & B Revenue","f & b","rev",False),
-    ("Revenue From Operations","revenue from op","rev",True),
-    ("Other Income","other income","rev",False), ("Total Revenue","total revenue","rev",True),
-    ("Material Cost","material cost","cost",False), ("Doctor Cost","doctor cost","cost",False),
-    ("Employee Cost","employee cost","cost",False), ("Utilities (Power, Fuel)","utilities","cost",False),
-    ("Repair & Maintenance","repair & main","cost",False), ("Marketing Cost","marketing","cost",False),
-    ("Lab Test Charges","lab test","cost",False), ("Rent Paid","rent paid","cost",False),
-    ("House Keeping","house keeping","cost",False), ("Security Expenses","security","cost",False),
-    ("Printing & Stationery","printing","cost",False), ("Insurance","insurance","cost",False),
-    ("Rates & Taxes","rates & tax","cost",False), ("Professional Fee","professional fee","cost",False),
-    ("Quality & Infection Control","quality","cost",False),
-    ("Provision for Bad Debts","provis","cost",False), ("Communication Costs","communication","cost",False),
-    ("Business Travel Cost","business travel","cost",False),
-    ("Miscellaneous Expenses","miscellaneous","cost",False), ("CSR Activity","csr","cost",False),
-    ("Total Expenses","total expenses","cost",True),
-    ("EBITDA","ebitda","profit",True), ("Depreciation","depreciation","profit",False),
-    ("EBIT (Operating Profit)","ebit (","profit",True), ("Finance Cost","finance cost","profit",False),
-    ("PBT","pbt","profit",True), ("Tax","tax","profit",False), ("PAT","pat","profit",True),
-]
-
-def parse_pl_consol(ws):
-    """Consolidated monthly P&L ('PL_Consol' in Profit_and_Loss_Statement files).
-    Columns shift per file, so locate CM/Budget/SMLY dynamically from the group +
-    header rows. Values are in ₹ Lakhs -> stored as absolute INR.
-    Returns (month 'YYYY-MM', {'lines':[{label,grp,tot,a,b,smly}], 'src':...})."""
-    rows = list(ws.iter_rows(values_only=True))
-    hrow = next((i for i, r in enumerate(rows[:14])
-                 if any(isinstance(c, str) and c.strip() == "Particulars" for c in r)), None)
-    if hrow is None or hrow == 0: return None, None
-    g = [str(c).strip().lower() if c else "" for c in rows[hrow - 1]]
-    h = rows[hrow]
-    cm = g.index("cm") if "cm" in g else None
-    bud = g.index("budget") if "budget" in g else None
-    if cm is None or bud is None: return None, None
-    cm_month = _pl_month(h[cm])
-    if not cm_month: return None, None
-    cm_mo = int(cm_month[5:])
-    smly = {c.month: j for j, c in enumerate(h)
-            if isinstance(c, (datetime.datetime, datetime.date)) and c.year < int(cm_month[:4])}
-    LK = 1e5
-    lines = []
-    for label, pref, grp, tot in PL_SPEC:
-        for r in rows[hrow + 1:]:
-            lbl = str(r[1]).strip().lower() if len(r) > 1 and r[1] else ""
-            if not lbl.startswith(pref):
-                continue
-            a = num(r[cm]) if cm < len(r) else 0
-            b = num(r[bud]) if bud < len(r) else 0
-            sv = num(r[smly[cm_mo]]) if cm_mo in smly and smly[cm_mo] < len(r) else 0
-            lines.append({"label": label, "grp": grp, "tot": tot,
-                          "a": a * LK, "b": b * LK, "smly": sv * LK})
-            break
-    return cm_month, {"lines": lines}
-
-def _tb_month(cell):
-    """TB month-column header -> 'YYYY-MM' ('Apr_26','May-26','jun 26','Jan-27')."""
-    if isinstance(cell, (datetime.datetime, datetime.date)):
-        return cell.strftime("%Y-%m")
-    s = str(cell).strip().lower()
-    m = re.match(r'([a-z]{3,})[\s_\-]*(\d{2,4})$', s)
-    if m and m.group(1)[:3] in _MONTHS3:
-        yr = int(m.group(2)); yr += 2000 if yr < 100 else 0
-        return f"{yr}-{_MONTHS3[m.group(1)[:3]]:02d}"
-    return None
-
-# account-name fragments that mark a NON-recurring material entry (one-off).
-# ('PROVISION FOR' not bare 'PROVISION', to avoid 'PURCHASE - PROVISIONS & STORES';
-#  actual PURCHASE lines are always recurring and excluded below.)
-_TB_ONEOFF = ("PROVISION FOR", "GST", "REVERSAL", "WRITE OFF", "WRITE-OFF",
-              "PRIOR PERIOD", "ROUND OFF")
-
-def parse_tb_material(wb):
-    """From TB_Kochi/TB_Calicut/TB_FNB, return {ym: {'total':INR,'oneoff':INR}}
-    for every current-FY month column present. Latest P&L file carries all months,
-    so this yields the full monthly material series for the bridge."""
-    out = {}
-    for sh in wb.sheetnames:
-        if not sh.strip().lower().startswith("tb_"):
-            continue
-        rows = list(wb[sh].iter_rows(values_only=True))
-        hr = next((i for i, r in enumerate(rows[:6])
-                   if any(isinstance(c, str) and c.strip().lower() == "mis_group1" for c in r)), None)
-        if hr is None:
-            continue
-        low = [str(c).strip().lower() if c else "" for c in rows[hr]]
-        gi = low.index("mis_group1"); di = low.index("description") if "description" in low else 1
-        ytd_max = max([j for j, h in enumerate(low) if "ytd" in h] or [gi])
-        mcols = {j: _tb_month(rows[hr][j]) for j in range(ytd_max + 1, len(rows[hr]))
-                 if _tb_month(rows[hr][j])}
-        for r in rows[hr + 1:]:
-            grp = str(r[gi]).strip() if len(r) > gi and r[gi] else ""
-            if grp != "Material Cost":
-                continue
-            acc = str(r[di]).strip().upper() if len(r) > di and r[di] else ""
-            one = (not acc.startswith("PURCHASE")) and any(k in acc for k in _TB_ONEOFF)
-            for j, ym in mcols.items():
-                v = num(r[j]) if j < len(r) else 0
-                if not v:
-                    continue
-                d = out.setdefault(ym, {"total": 0.0, "oneoff": 0.0})
-                d["total"] += v
-                if one:
-                    d["oneoff"] += v
-    return out
-
 # ---------------------------------------------------------------------- main
 def main():
     folder = sys.argv[1] if len(sys.argv) > 1 else \
@@ -453,7 +242,7 @@ def main():
 
     # ---- flash files ----
     by_date = {}
-    for f in collect_files(folder, "Daily Revenue Flash_New_*.xlsx"):
+    for f in glob.glob(os.path.join(folder, "Daily Revenue Flash_New_*.xlsx")):
         d = file_date(f)
         if d and (d not in by_date or os.path.getmtime(f) > os.path.getmtime(by_date[d])):
             by_date[d] = f
@@ -537,7 +326,7 @@ def main():
 
     # ---- Daily MIS files: doctor x month granularity ----
     mis_by_date = {}
-    for f in collect_files(folder, "Daily MIS*.xlsx"):
+    for f in glob.glob(os.path.join(folder, "Daily MIS*.xlsx")):
         d = file_date(f)
         if d and (d not in mis_by_date or os.path.getmtime(f) > os.path.getmtime(mis_by_date[d])):
             mis_by_date[d] = f
@@ -564,71 +353,14 @@ def main():
                 rec[field] += val
         ws = get("MoM FY 26-27") or get("MoM FY 27-28")
         if ws is not None: mom_fy.update(parse_mom_fy(ws))
-        # ---- Calicut satellite (VPSLMC) sheets ----
-        cal = {}
-        ws = get("Input Calicut")
-        if ws is not None:
-            cserv, cdaily = parse_calicut_input(ws)
-            if cdaily:
-                cal["serv"] = {k: round(v) for k, v in cserv.items()}
-                cal["daily"] = {k: round(v) for k, v in cdaily.items()}
-        cdocs = {}
-        for sn, field in [("Doc wise revenue Calicut", "rev"), ("OP Visit-Calicut", "opv")]:
-            ws = get(sn)
-            if ws is None: continue
-            parsed = parse_doctor_day_matrix(ws, field)
-            if not parsed or not parsed[0]: continue
-            for (dept, doc), val in parsed[0].items():
-                rec = cdocs.setdefault(doc, {"dept": dept, "rev": 0, "opv": 0})
-                if dept: rec["dept"] = dept
-                rec[field] += val
-        if cdocs:
-            cal["doctors"] = {k: {"dept": v["dept"], "rev": round(v["rev"]), "opv": round(v["opv"])}
-                              for k, v in cdocs.items() if v["rev"] or v["opv"]}
         w.close()
-        history[mkey] = {"calicut": cal, "asOf": d.strftime("%Y-%m-%d"),
+        history[mkey] = {"asOf": d.strftime("%Y-%m-%d"),
                          "daysElapsed": d.day,
                          "doctors": {k: v for k, v in docs.items() if any(v[f] for f in ("rev","opv","adm","dis"))},
                          "docDaily": {k: {str(day): round(v, 0) for day, v in dd.items()}
                                       for k, dd in doc_daily.items() if dd}}
     json.dump(history, open(hist_path, "w"))
     print("History months:", sorted(history))
-
-    # ---- Consolidated monthly P&L from 'Profit_and_Loss_Statement_*.xlsx' ----
-    # Rebuilt fresh from the P&L files present (they persist in the folder).
-    pnl_path = os.path.join(tools, "pnl_history.json")
-    pnl_hist = {}
-    for f in collect_files(folder, "Profit_and_Loss_Statement*.xlsx"):
-        try:
-            w = openpyxl.load_workbook(f, read_only=True, data_only=True)
-        except Exception as e:
-            print("  skip P&L", os.path.basename(f), e); continue
-        sn = next((s for s in w.sheetnames if s.strip().lower() == "pl_consol"), None)
-        if sn:
-            mkey, pnl = parse_pl_consol(w[sn])
-            if mkey and pnl and pnl.get("lines"):
-                pnl["_src"] = os.path.basename(f)
-                pnl_hist[mkey] = pnl
-                print("  Parsed P&L", mkey, "from", os.path.basename(f), "-", len(pnl["lines"]), "lines")
-        w.close()
-    try: json.dump(pnl_hist, open(pnl_path, "w"))
-    except Exception as e: print("  (pnl_history not written:", e, ")")
-    print("P&L months:", sorted(k for k in pnl_hist))
-
-    # ---- Material cost bridge: monthly material total + one-off, from latest file's TB ----
-    mat_bridge = {}
-    if pnl_hist:
-        latest_src = pnl_hist[sorted(pnl_hist)[-1]].get("_src")
-        path = next((f for f in collect_files(folder, "Profit_and_Loss_Statement*.xlsx")
-                     if os.path.basename(f) == latest_src), None)
-        if path:
-            try:
-                w = openpyxl.load_workbook(path, read_only=True, data_only=True)
-                mat_bridge = parse_tb_material(w); w.close()
-                print("Material bridge months:", sorted(mat_bridge),
-                      "| latest one-off ₹%.2f Cr" % ((mat_bridge.get(sorted(mat_bridge)[-1], {}).get("oneoff", 0)/1e7) if mat_bridge else 0))
-            except Exception as e:
-                print("  (material bridge skipped:", e, ")")
 
     # discharge aggregates per doctor + overall
     dis_by_doc, status_mix, payer_mix = {}, {}, {}
@@ -654,9 +386,6 @@ def main():
         docTypeMix=doc_type_mix, opAgg=op_agg,
         disDates=sorted({r["date"] for r in discharges}),
         nDischarges=len(discharges),
-        pnl=pnl_hist,
-        pnlLatest=(sorted(k for k in pnl_hist) or [None])[-1],
-        matBridge=mat_bridge,
     )
     out = os.path.join(folder, "LHRC_Revenue_Dashboard.html")
     open(out, "w", encoding="utf-8").write(TEMPLATE.replace("__DATA__", json.dumps(data)))
@@ -698,45 +427,14 @@ td.doc{max-width:190px;overflow:hidden;text-overflow:ellipsis}
 .mbtn.on{background:var(--blue);color:#fff;border-color:var(--blue)}
 .tag{font-size:10.5px;padding:1px 7px;border-radius:10px}
 .tag.g{background:rgba(26,127,78,.12);color:var(--good)}.tag.r{background:rgba(192,57,43,.1);color:var(--bad)}.tag.y{background:rgba(127,140,155,.15);color:#5a6875}
-.findgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
-.fcard{border:1px solid #e3e8ee;border-left:4px solid var(--gray);border-radius:8px;padding:11px 13px;background:#fff;box-shadow:0 1px 2px rgba(36,51,66,.05)}
-.fcard.g{border-left-color:var(--good)}.fcard.r{border-left-color:var(--bad)}.fcard.y{border-left-color:#c8952b}
-.fcard .who{font-weight:650;font-size:12.5px}
-.fcard .who .dp{font-weight:500;font-size:10.5px;color:var(--gray);margin-left:6px;text-transform:uppercase;letter-spacing:.03em}
-.fcard .claim{font-size:12px;line-height:1.5;margin:5px 0 4px;color:#33475b}
-.fcard .imp{font-size:14.5px;font-weight:700}
-.fcard.g .imp{color:var(--good)}.fcard.r .imp{color:var(--bad)}.fcard.y .imp{color:#a37a1e}
-.fcard .evid{font-size:10.5px;color:var(--gray);margin-top:4px;line-height:1.45}
 footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 .scroll{overflow-x:auto}
-.tabbar{background:#fff;border-bottom:2px solid #e3e8ee;box-shadow:0 1px 3px rgba(36,51,66,.05)}
-.tabs{max-width:1320px;margin:0 auto;padding:0 24px;display:flex;gap:4px}
-.tab{padding:13px 22px;font-size:14px;font-weight:600;color:var(--gray);cursor:pointer;border:none;background:none;border-bottom:3px solid transparent;margin-bottom:-2px;transition:color .15s}
-.tab:hover{color:var(--blue)}
-.tab.on{color:var(--blue);border-bottom-color:var(--blue)}
-.pane{display:none}.pane.on{display:block;animation:fade .25s}
-@keyframes fade{from{opacity:0}to{opacity:1}}
-.banner{background:rgba(43,124,190,.07);border:1px solid rgba(43,124,190,.2);border-radius:8px;padding:10px 14px;font-size:12px;color:#3a4a5a;margin-bottom:18px;line-height:1.55}
-.banner b{color:var(--maroon)}
-#pnlTable td.lbl0{font-weight:650;color:#243342}
-#pnlTable tr.sub td{color:var(--gray);padding-left:20px}
-#pnlTable tr.tot td{border-top:2px solid #d4dbe3;font-weight:650;background:rgba(43,124,190,.04)}
-#pnlTable tr.grand td{border-top:2px solid var(--maroon);font-weight:700;background:rgba(139,26,74,.05)}
 </style></head><body>
 <header><div><h1>VPS Lakeshore · Daily Revenue Dashboard</h1>
 <div class="sub">Lakeshore Hospital &amp; Research Centre Ltd, Kochi · Global Lifecare</div></div>
 <div class="sub" id="asof"></div></header>
-<div class="tabbar"><div class="tabs">
-<button class="tab on" data-pane="rev">Daily Revenue &amp; Operations</button>
-<button class="tab" data-pane="pnl">P&amp;L &amp; Cost Analysis</button>
-</div></div>
 <div class="wrap">
-<div id="pane-rev" class="pane on">
 <div class="cards" id="cards"></div>
-
-<div class="panel"><h2>Daily Commentary</h2>
-<div class="note" id="cmnote"></div>
-<div id="cmtext" style="font-size:13px;line-height:1.7;max-width:1000px"></div></div>
 
 <div class="panel"><h2>Daily Gross Revenue — Actual vs Budget</h2>
 <div class="note">OP / IP / Pharmacy stacked; line = budgeted total.</div>
@@ -752,10 +450,6 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 <div class="panel"><h2>Volumes — OP Visits &amp; IP Discharges</h2>
 <div class="note">FY 26-27 monthly vs budget (dotted).</div><canvas id="volChart"></canvas></div>
 </div>
-
-<div class="panel"><h2>Doctor Findings — Auto-Detected Signals</h2>
-<div class="note" id="findnote"></div>
-<div class="findgrid" id="findings"></div></div>
 
 <div class="panel"><h2>Doctor League Table — Month on Month</h2>
 <div class="note" id="dlnote"></div>
@@ -808,67 +502,6 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 <div class="panel"><h2>Department Revenue — Captured Flash Days</h2>
 <div class="note" id="deptnote"></div><canvas id="deptChart" style="max-height:400px"></canvas></div>
 </div>
-
-<div id="calSection" style="display:none">
-<h2 style="color:var(--maroon);font-size:17px;margin:28px 0 12px;border-bottom:2px solid var(--maroon);padding-bottom:6px">VPS Lakeshore Medical Centre · Calicut (Satellite)</h2>
-<div class="cards" id="calcards"></div>
-<div class="grid">
-<div class="panel"><h2>Calicut — Daily Revenue</h2>
-<div class="note" id="caldnote"></div>
-<div id="calbtns" style="margin-bottom:8px"></div><canvas id="calDaily"></canvas></div>
-<div class="panel"><h2>Calicut — Service Group Mix</h2>
-<div class="note" id="calsnote"></div><canvas id="calServ" style="max-height:330px"></canvas></div>
-</div>
-<div class="panel"><h2>Calicut — Doctor League</h2>
-<div class="note" id="callnote"></div>
-<div class="scroll"><table id="calTable"><thead><tr>
-<th>Doctor</th><th>Department</th><th class="r">Rev cur (₹L)</th><th class="r">₹L/day</th>
-<th class="r">OP visits</th><th class="r">Rev prev (₹L)</th><th class="r">Δ run-rate</th><th class="r">Share</th>
-</tr></thead><tbody></tbody></table></div></div>
-</div>
-
-</div><!-- /pane-rev -->
-
-<div id="pane-pnl" class="pane">
-<div class="banner" id="pnlbanner"></div>
-<div class="cards" id="pnlcards"></div>
-
-<div class="panel"><h2>P&amp;L Commentary — <span id="pnlmlbl"></span></h2>
-<div class="note" id="pnlcmnote"></div>
-<div id="pnlcmtext" style="font-size:13px;line-height:1.7;max-width:1000px"></div></div>
-
-<div class="panel"><h2>P&amp;L Waterfall — Revenue to Net Profit</h2>
-<div class="note">₹ Cr. Blue = revenue &amp; profit subtotals; red = cost deductions; green = net profit. Hover for values.</div>
-<canvas id="wfChart" style="max-height:380px"></canvas></div>
-
-<div class="grid">
-<div class="panel"><h2>Cost Drivers — % of Revenue: Actual vs Budget</h2>
-<div class="note">Each cost line as a share of revenue. Bars over budget (dotted) are adverse.</div>
-<canvas id="drvChart"></canvas></div>
-<div class="panel"><h2>Cost Mix — Share of Total Cost</h2>
-<div class="note" id="mixnote"></div><canvas id="mixChart" style="max-height:330px"></canvas></div>
-</div>
-
-<div class="panel"><h2>Material Cost Bridge — <span id="mbSpan"></span></h2>
-<div class="note" id="mbnote"></div>
-<canvas id="mbChart" style="max-height:360px"></canvas></div>
-
-<div class="panel"><h2>Profit &amp; Loss Statement — <span id="pnlmlbl2"></span></h2>
-<div class="note">Audited monthly close. Variance is favourable (green) when actual beats budget — lower cost or higher revenue/profit. All figures ₹ Cr.</div>
-<div class="scroll"><table id="pnlTable"><thead><tr>
-<th>Particulars</th><th class="r">Actual ₹Cr</th><th class="r">% Rev</th>
-<th class="r">Budget ₹Cr</th><th class="r">% Rev</th><th class="r">Variance ₹Cr</th><th>F/A</th>
-</tr></thead><tbody></tbody></table></div></div>
-
-<div class="grid">
-<div class="panel"><h2>Monthly Revenue — Actual vs Budget</h2>
-<div class="note">₹ Cr per closed month, consolidated management P&amp;L.</div>
-<canvas id="revTrend"></canvas></div>
-<div class="panel"><h2>Profitability Trend — EBITDA &amp; PAT</h2>
-<div class="note" id="mgnnote"></div><canvas id="marginTrend"></canvas></div>
-</div>
-</div><!-- /pane-pnl -->
-
 <footer id="foot"></footer>
 </div>
 <script>
@@ -949,19 +582,12 @@ let dailyChart=null;
 window.drawDaily=function(key){
  const rows=D.daily[key];
  if(dailyChart)dailyChart.destroy();
- const dailyTotals={id:'dailyTotals',afterDatasetsDraw(chart){
-  const y=chart.scales.y, meta=chart.getDatasetMeta(0), ctx=chart.ctx;
-  if(!meta||!meta.data)return;
-  ctx.save();ctx.font='700 9px system-ui,Arial';ctx.fillStyle='#33475b';ctx.textAlign='center';
-  meta.data.forEach((bar,i)=>{const t=(rows[i].revTot||0)/L; if(t<=0)return; ctx.fillText(t.toFixed(0),bar.x,y.getPixelForValue(t)-4);});
-  ctx.restore();
- }};
- dailyChart=new Chart(document.getElementById('dailyChart'),{plugins:[dailyTotals],data:{labels:rows.map(r=>r.date.slice(8)+' '+r.dow.slice(0,2)),datasets:[
+ dailyChart=new Chart(document.getElementById('dailyChart'),{data:{labels:rows.map(r=>r.date.slice(8)+' '+r.dow.slice(0,2)),datasets:[
   {type:'bar',label:'OP',data:rows.map(r=>r.revOP/L),backgroundColor:LT,stack:'a'},
   {type:'bar',label:'IP',data:rows.map(r=>r.revIP/L),backgroundColor:BLUE,stack:'a'},
   {type:'bar',label:'Pharmacy',data:rows.map(r=>r.revPH/L),backgroundColor:MAROON,stack:'a'},
   {type:'line',label:'Budget',data:rows.map(r=>r.budTot/L),borderColor:GRAY,borderDash:[5,4],pointRadius:0,tension:.2}]},
-  options:{layout:{padding:{top:16}},plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},
+  options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},
   scales:{x:{stacked:true,ticks:{font:{size:10}}},y:{stacked:true,title:{display:true,text:'₹ Lakhs'}}}}});
  document.querySelectorAll('.mbtn').forEach(b=>b.classList.toggle('on',b.dataset.k===key));
 }
@@ -1040,86 +666,6 @@ if(hCur){
  document.getElementById('dlnote').innerHTML=
   `Current = <b>${mName(curM)}</b> (${dCur} days elapsed) vs previous = <b>${prevM?mName(prevM):'—'}</b> (${dPrev} days). `+
   `Revenue/visits/admissions/discharges from the Daily MIS doctor sheets. Conv % = admissions ÷ OP visits (current month). Rank Δ = movement in revenue rank vs previous month. Columns marked * come from the flash detail sheets over ${D.disDates.length} captured days: IP mix (share of doctor revenue billed as IP), New/Free OP visit shares, and from ${D.nDischarges} discharges — status, ALOS and cash mix. Click a header to sort.`;
-
- // ---------------- auto-detected doctor findings ----------------
- const ddC=hCur.docDaily||{}, ddP=hPrev? (hPrev.docDaily||{}):{};
- const [fy,fm]=curM.split('-').map(Number), fmDays=new Date(fy,fm,0).getDate();
- const dstats=(o,nd)=>{const v=[];for(let i=1;i<=nd;i++)v.push(((o&&o[String(i)])||0)/L);
-  const n=v.length,mean=v.reduce((a,b)=>a+b,0)/n;
-  const sd=Math.sqrt(v.reduce((a,b)=>a+(b-mean)*(b-mean),0)/Math.max(n-1,1));
-  return{n,mean,sd}};
- const F=[]; let screened=0;
- const fmtL=x=>'₹'+Math.abs(x).toFixed(1)+' L';
- const totP=Object.values(docsP).reduce((a,v)=>a+(v.rev||0),0);
- names.forEach(n=>{
-  const c=docsC[n]||{}, p=docsP[n]||{};
-  const rrCd=(c.rev||0)/L/dCur, rrPd=(p.rev||0)/L/dPrev;
-  if(Math.max(rrCd,rrPd)<0.3) return;
-  screened++;
-  const disp=tc(n), dept=tc(c.dept||p.dept||'');
-  // 1. appeared / gone quiet
-  if(!(p.rev)&&c.rev&&rrCd>=0.5){
-   F.push({cls:'g',doc:disp,dept,imp:rrCd*fmDays,
-    claim:`No revenue in ${mName(prevM)}, now running ₹${rrCd.toFixed(2)} L/day — new, returned from leave, or newly attributed.`,
-    evid:`₹${((c.rev||0)/L).toFixed(1)} L in ${dCur} days · ${c.opv||0} OP visits · ${c.dis||0} discharges`});
-   return;}
-  if(!(c.rev)&&p.rev&&rrPd>=0.5){
-   F.push({cls:'r',doc:disp,dept,imp:-rrPd*fmDays,
-    claim:`Zero revenue so far in ${mName(curM)} after ₹${rrPd.toFixed(2)} L/day in ${mName(prevM)} — leave, exit or attribution gap. Verify.`,
-    evid:`prev month: ₹${((p.rev||0)/L).toFixed(1)} L · ${p.opv||0} OP visits`});
-   return;}
-  // 2. significant run-rate shift, tested vs the doctor's own daily variance
-  if(c.rev&&p.rev&&hPrev){
-   const sC=dstats(ddC[n],dCur), sP=dstats(ddP[n],dPrev);
-   const se=Math.sqrt(sC.sd*sC.sd/sC.n+sP.sd*sP.sd/sP.n);
-   const dlt=sC.mean-sP.mean, z=se>0? dlt/se:0;
-   if(Math.abs(z)>=2&&Math.abs(dlt)>=0.25&&Math.abs(dlt)/Math.max(sP.mean,.01)>=0.15){
-    const opD=pct((c.opv||0)/dCur,(p.opv||1)/dPrev), dsD=pct((c.dis||0)/dCur,(p.dis||1)/dPrev);
-    const rpC=c.dis? (c.rev||0)/c.dis/L:null, rpP=p.dis? (p.rev||0)/p.dis/L:null;
-    const rpD=(rpC&&rpP)? pct(rpC,rpP):null;
-    const parts=[];
-    if(p.dis||c.dis)parts.push(['IP volume',dsD]);
-    if(rpD!=null)parts.push(['₹/discharge',rpD]);
-    if(p.opv||c.opv)parts.push(['OP volume',opD]);
-    parts.sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
-    const drvTxt=parts.length? `mainly ${parts[0][0]} (${parts[0][1]>=0?'+':''}${parts[0][1].toFixed(0)}%)`+
-      (parts[1]? `; ${parts[1][0]} ${parts[1][1]>=0?'+':''}${parts[1][1].toFixed(0)}%`:''):'driver unclear';
-    F.push({cls:dlt>0?'g':'r',doc:disp,dept,imp:dlt*fmDays,
-     claim:`Run-rate ${dlt>0?'up':'down'}: ₹${sP.mean.toFixed(2)} → ₹${sC.mean.toFixed(2)} L/day vs ${mName(prevM)} — ${drvTxt}.`,
-     evid:`z = ${z.toFixed(1)} vs own daily variance · ${dCur} vs ${dPrev} days observed`});
-    return;}
-  }
-  // 3. conversion shift on steady OP base
-  if((c.opv||0)>=60&&(p.opv||0)>=60){
-   const cvC=(c.adm||0)/c.opv*100, cvP=(p.adm||0)/p.opv*100;
-   const rp=((c.dis? (c.rev||0)/c.dis: p.dis? (p.rev||0)/p.dis:0))/L;
-   if(Math.abs(cvC-cvP)>=3&&Math.abs(cvC-cvP)/Math.max(cvP,1)>=0.25&&rp>0.3){
-    const impM=(cvC-cvP)/100*(c.opv/dCur)*fmDays*rp;
-    F.push({cls:cvC>cvP?'g':'r',doc:disp,dept,imp:impM,
-     claim:`OP→IP conversion ${cvC>cvP?'rose':'fell'} ${cvP.toFixed(1)}% → ${cvC.toFixed(1)}% on a steady OP base.`,
-     evid:`OP ${c.opv} (prev ${p.opv}) · adm ${c.adm||0} (prev ${p.adm||0}) · @ ₹${rp.toFixed(2)} L/disch`});
-    return;}
-  }
- });
- // 4. portfolio concentration
- if(totC&&totP){
-  const top5=docs=>Object.values(docs).map(v=>v.rev||0).sort((a,b)=>b-a).slice(0,5).reduce((a,b)=>a+b,0);
-  const shC=top5(docsC)/totC*100, shP=top5(docsP)/totP*100;
-  if(Math.abs(shC-shP)>=2)
-   F.push({cls:'y',doc:'Portfolio',dept:'concentration',imp:0,
-    claim:`Top-5 doctors now ${shC.toFixed(0)}% of doctor-attributed revenue (${shP.toFixed(0)}% in ${mName(prevM)}) — key-person risk ${shC>shP?'rising':'easing'}.`,
-    evid:`${Object.keys(docsC).length} active doctors this month`});
- }
- F.sort((a,b)=>Math.abs(b.imp)-Math.abs(a.imp));
- const FK=F.slice(0,9);
- document.getElementById('findings').innerHTML=FK.length? FK.map(c=>
-  `<div class="fcard ${c.cls}"><div class="who">${c.doc}<span class="dp">${c.dept}</span></div>`+
-  `<div class="claim">${c.claim}</div>`+
-  (c.imp?`<div class="imp">${c.imp>0?'+':'−'}${fmtL(c.imp)} / month</div>`:'')+
-  `<div class="evid">${c.evid}</div></div>`).join(''):
-  '<div class="note">No statistically significant doctor-level shifts detected vs the previous month.</div>';
- document.getElementById('findnote').innerHTML=
-  `Hypothesis screen: each doctor's daily revenue in <b>${mName(curM)}</b> (${dCur} days) is tested against <b>${prevM?mName(prevM):'—'}</b> using their own day-to-day variance (Welch z ≥ 2, shift ≥ ₹0.25 L/day and ≥ 15%). ${screened} doctors screened → ${F.length} findings; top ${FK.length} shown, ranked by monthly ₹ impact. Early-month results (&lt; 10 days) carry wider uncertainty.`;
 }
 let sortK='revC',sortDir=-1;
 function renderLeague(){
@@ -1295,263 +841,7 @@ new Chart(document.getElementById('deptChart'),{type:'bar',data:{labels:D.deptTo
  options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{title:{display:true,text:'₹ Lakhs'}},y:{ticks:{font:{size:10.5}}}}}});
 
 document.getElementById('foot').innerHTML='<b>Files parsed:</b> '+D.filesParsed.map(f=>'<span class="pill">'+f+'</span>').join('')+
- '<br>Gross revenue per Daily Revenue Flash. Doctor-month figures from Daily MIS doctor sheets (newest file per month; current month is MTD — compare on ₹/day run-rate). Discharge status / ALOS / payer mix cover only dates with a flash file on hand. ARPOB = gross revenue ÷ occupied bed-days; ALOS from MIS MoM sheet. Operations include VPSLMC (satellite) figures where the source does. Calicut section from the Daily MIS "Input Calicut" / "Doc wise revenue Calicut" / "OP Visit-Calicut" sheets.';
-
-// ---- daily commentary (auto-generated) ----
-(function(){
- const rows=D.daily[curKey]||[]; if(!rows.length)return;
- const last=rows[rows.length-1];
- const dObj=new Date(last.date+'T12:00:00');
- const dName=dObj.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
- document.getElementById('cmnote').textContent='Auto-generated from the '+D.latestDate+' flash and Daily MIS.';
- const fL=v=>'\u20B9'+(v/L).toFixed(1)+' L';
- const workRows=rows.filter(r=>r.revTot>0);
- const prior=workRows.slice(0,-1).slice(-7);
- const avg7=prior.length? prior.reduce((a,r)=>a+r.revTot,0)/prior.length:0;
- const vb=pct(last.revTot,last.budTot), va=avg7?pct(last.revTot,avg7):0;
- const mtdRev=rows.reduce((a,r)=>a+r.revTot,0), mtdBud=rows.reduce((a,r)=>a+r.budTot,0), mtdP=pct(mtdRev,mtdBud);
- const mix=[['IP',last.revIP],['OP',last.revOP],['Pharmacy',last.revPH]].sort((a,b)=>b[1]-a[1]);
- const dd=(D.history[curM]&&D.history[curM].docDaily)||{};
- const dayK=String(dObj.getDate());
- const docs=(D.history[curM]&&D.history[curM].doctors)||{};
- const tops=Object.entries(dd).map(([k,v])=>[k,v[dayK]||0]).filter(x=>x[1]>0&&!/^LHRC/i.test(x[0])).sort((a,b)=>b[1]-a[1]).slice(0,3);
- const topTxt=tops.map(([k,v])=>tc(k)+(docs[k]&&docs[k].dept?' ('+tc(docs[k].dept)+', '+fL(v)+')':' ('+fL(v)+')')).join(', ');
- const conv=last.revTot? last.collTot/last.revTot*100:0;
- const isSun=(last.dow||'').toUpperCase().startsWith('SUN');
- const s=[];
- s.push(`<b>${dName}</b> closed at <b>${fL(last.revTot)}</b> gross revenue against a budget of ${fL(last.budTot)} (<span class="${vb>=0?'up':'dn'}">${vb>=0?'+':''}${vb.toFixed(1)}%</span>)`+(avg7?`, ${Math.abs(va).toFixed(0)}% ${va>=0?'above':'below'} the trailing 7-day average of ${fL(avg7)}.`:'.'));
- s.push(`The day was led by ${mix[0][0]} at ${fL(mix[0][1])}, followed by ${mix[1][0]} (${fL(mix[1][1])}) and ${mix[2][0]} (${fL(mix[2][1])}).`);
- if(topTxt) s.push(`Top contributors: ${topTxt}.`);
- s.push(`Collections came in at ${fL(last.collTot)} \u2014 ${conv.toFixed(0)}% of the day's gross.`);
- s.push(`Month to date stands at ${fmtCr(mtdRev)} vs ${fmtCr(mtdBud)} budgeted (<span class="${mtdP>=0?'up':'dn'}">${mtdP>=0?'+':''}${mtdP.toFixed(1)}%</span>)`+((proj&&fullBud)?`, with the working-day run-rate pointing to a ${fmtCr(proj)} landing against the \u20B9${(fullBud/CR).toFixed(0)} Cr month budget.`:'.'));
- if(isSun) s.push('Sunday posting \u2014 the low absolute number is seasonal, not an anomaly.');
- document.getElementById('cmtext').innerHTML=s.join(' ');
-})();
-
-// ---------------- Calicut satellite (VPSLMC) ----------------
-(function(){
- const calM=hMonths.filter(mk=>D.history[mk].calicut&&D.history[mk].calicut.daily);
- if(!calM.length)return;
- document.getElementById('calSection').style.display='';
- const ck=calM[calM.length-1], pk=calM[calM.length-2];
- const c=D.history[ck].calicut, p=pk? D.history[pk].calicut:null;
- const dC=daysIn(ck,D.history[ck]), dP=pk? daysIn(pk,D.history[pk]):1;
- const sum=o=>Object.values(o||{}).reduce((a,v)=>a+v,0);
- const mtdRev=sum(c.daily), rr=mtdRev/dC;
- const pRev=p? sum(p.daily):0, prr=p? pRev/dP:0;
- const opTot=Object.values(c.doctors||{}).reduce((a,v)=>a+(v.opv||0),0);
- const active=Object.values(c.doctors||{}).filter(v=>v.rev>0).length;
- const momP=prr? (rr/prr-1)*100:null;
- const share=(mtd.revTot)? mtdRev/mtd.revTot*100:null;
- document.getElementById('calcards').innerHTML=
-  card('Calicut MTD Revenue ('+mName(ck)+')','\u20b9'+(mtdRev/L).toFixed(1)+' L',
-   share!=null? share.toFixed(1)+'% of unit gross':'','',1)+
-  card('Run-rate','\u20b9'+(rr/L).toFixed(2)+' L/day',
-   momP==null?'\u2014':(momP>=0?'\u25b2 +':'\u25bc ')+momP.toFixed(1)+'% vs '+(pk?mName(pk):'prev'),momP==null?'':(momP>=0?'up':'dn'))+
-  card('OP Visits (MTD)',opTot.toLocaleString('en-IN'),'~'+(opTot/dC).toFixed(0)+' / day','')+
-  card('Active Doctors',active,(pk&&p.doctors)? Object.values(p.doctors).filter(v=>v.rev>0).length+' in '+mName(pk):'','');
- // daily chart with month toggle
- let calChart=null;
- window.drawCal=function(mk){
-  const h=D.history[mk], cc=h.calicut;
-  const nDays=daysIn(mk,h);
-  const [y,m]=mk.split('-').map(Number);
-  const days=[...Array(nDays).keys()].map(i=>i+1);
-  const vals=days.map(d=>{
-   const iso=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-   return (cc.daily[iso]||0)/L;});
-  const dows=days.map(d=>'SMTWTFS'[new Date(y,m-1,d).getDay()]);
-  if(calChart)calChart.destroy();
-  calChart=new Chart(document.getElementById('calDaily'),{type:'bar',
-   data:{labels:days.map((d,i)=>d+' '+dows[i]),datasets:[
-    {label:'Gross revenue (\u20b9 L)',data:vals,backgroundColor:days.map((d,i)=>dows[i]==='S'?'rgba(139,26,74,.35)':MAROON)}]},
-   options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},
-   scales:{x:{ticks:{font:{size:10}}},y:{title:{display:true,text:'\u20b9 Lakhs'}}}}});
-  document.querySelectorAll('#calbtns .mbtn').forEach(b=>b.classList.toggle('on',b.dataset.k===mk));
- }
- document.getElementById('calbtns').innerHTML=calM.map(k=>`<button class="mbtn" data-k="${k}" onclick="drawCal('${k}')">${k}</button>`).join('');
- drawCal(ck);
- document.getElementById('caldnote').textContent='From the Daily MIS "Input Calicut" sheet. Sundays (maroon-light) \u2014 clinic closed or skeleton OP; zero posting is normal.';
- // service mix
- const sv=Object.entries(c.serv||{}).sort((a,b)=>b[1]-a[1]);
- document.getElementById('calsnote').textContent=mName(ck)+' MTD, \u20b9 Lakhs by collection head.';
- new Chart(document.getElementById('calServ'),{type:'doughnut',
-  data:{labels:sv.map(x=>x[0]),datasets:[{data:sv.map(x=>x[1]/L),
-   backgroundColor:[MAROON,BLUE,'#c8952b','#1a7f4e',GRAY,LT,'#5a6875','#d4dbe3']}]},
-  options:{plugins:{legend:{position:'bottom',labels:{boxWidth:11,font:{size:10.5}}},
-   tooltip:{callbacks:{label:t=>t.label+': \u20b9'+t.parsed.toFixed(1)+' L'}}}}});
- // doctor league
- const docsP=(p&&p.doctors)||{};
- let rows=Object.entries(c.doctors||{}).map(([n,v])=>{
-  const pv=docsP[n]||{};
-  const rrC=(v.rev||0)/dC, rrP=pv.rev? pv.rev/dP:0;
-  return {doc:tc(n),dept:tc(v.dept||''),rev:(v.rev||0)/L,rr:rrC/L,opv:v.opv||0,
-   revP:(pv.rev||0)/L,mom:rrP?(rrC/rrP-1)*100:null,share:mtdRev? (v.rev||0)/mtdRev*100:null};})
-  .filter(r=>r.rev>0.005||r.opv>0).sort((a,b)=>b.rev-a.rev).slice(0,25);
- const momCell=v=>v==null?'\u2014':`<span class="tag ${v>=10?'g':v<=-10?'r':'y'}">${v>=0?'+':''}${v.toFixed(0)}%</span>`;
- document.querySelector('#calTable tbody').innerHTML=rows.map(r=>
-  `<tr><td class="doc" title="${r.doc}">${r.doc}</td><td class="doc">${r.dept}</td>`+
-  `<td class="r"><b>${r.rev.toFixed(2)}</b></td><td class="r">${r.rr.toFixed(3)}</td>`+
-  `<td class="r">${r.opv||'\u2014'}</td><td class="r">${r.revP?r.revP.toFixed(2):'\u2014'}</td>`+
-  `<td class="r">${momCell(r.mom)}</td><td class="r">${r.share==null?'\u2014':r.share.toFixed(1)+'%'}</td></tr>`).join('');
- document.getElementById('callnote').innerHTML=
-  `Doctor-attributed gross revenue and OP visits at the Calicut medical centre, <b>${mName(ck)}</b> (${dC} days elapsed)`+
-  (pk?` vs <b>${mName(pk)}</b> (${dP} days) on \u20b9/day run-rate.`:'.')+' Top 25 by revenue.';
- // append a Calicut line to the daily commentary
- const dKeys=Object.keys(c.daily).sort();
- if(dKeys.length){
-  const lastD=dKeys[dKeys.length-1], v=c.daily[lastD];
-  const el=document.getElementById('cmtext');
-  if(el&&el.innerHTML) el.innerHTML+=` At the <b>Calicut satellite</b>, ${new Date(lastD+'T12:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'long'})} posted \u20b9${(v/L).toFixed(1)} L, taking its MTD to \u20b9${(mtdRev/L).toFixed(1)} L${share!=null?' ('+share.toFixed(1)+'% of unit gross)':''}.`;
- }
-})();
-
-// ==================== TAB SWITCHING ====================
-document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
-  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
-  document.querySelectorAll('.pane').forEach(x=>x.classList.remove('on'));
-  t.classList.add('on');
-  document.getElementById('pane-'+t.dataset.pane).classList.add('on');
-  if(t.dataset.pane==='pnl') initPnl();
-}));
-
-// ==================== P&L & COST ANALYSIS TAB ====================
-const RED='#c0392b', GREEN='#1a7f4e', AMBER='#c8952b';
-const crc=v=>'₹'+(v/CR).toFixed(2)+' Cr';
-let pnlBuilt=false;
-function initPnl(){
- if(pnlBuilt) return; pnlBuilt=true;
- const P=D.pnl||{}, keys=Object.keys(P).sort(), mk=D.pnlLatest;
- const mName2=k=>new Date(k+'-01T12:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
- const mShort=k=>new Date(k+'-01T12:00:00').toLocaleDateString('en-GB',{month:'short',year:'2-digit'});
- if(!mk||!P[mk]||!P[mk].lines){
-   document.getElementById('pnlbanner').innerHTML='No consolidated P&amp;L found. Add <b>Profit_and_Loss_Statement_FY27 &lt;Month&gt;.xlsx</b> files and rebuild.';
-   return;
- }
- const lines=P[mk].lines, map={}; lines.forEach(l=>map[l.label]=l);
- const g=l=>map[l]||{a:0,b:0,smly:0,grp:'cost'};
- const rev=g('Total Revenue').a, revB=g('Total Revenue').b||1, revS=g('Total Revenue').smly||0;
- const ml=mName2(mk);
- document.getElementById('pnlmlbl').textContent=ml;
- document.getElementById('pnlmlbl2').textContent=ml;
- document.getElementById('pnlbanner').innerHTML=
-  'Consolidated management P&amp;L (Kochi + Calicut + F&amp;B), latest close <b>'+ml+'</b>. '+
-  'Actual vs Budget vs same-month-last-year (YoY), all ₹ Cr. Source: <span style="color:var(--gray)">'+(P[mk]._src||'')+'</span>. '+
-  keys.length+' month(s) loaded — trend extends as more P&amp;L files are added.';
-
- const eb=g('EBITDA'), pat=g('PAT'), mat=g('Material Cost'), doc=g('Doctor Cost'), emp=g('Employee Cost');
- const man=doc.a+emp.a, texp=g('Total Expenses');
- const dv=v=>(v>=0?'+':'')+(v/CR).toFixed(2)+' Cr';
- const cards=[
-  ['Total Revenue',crc(rev),dv(rev-revB)+' vs bud',''],
-  ['EBITDA',crc(eb.a)+' · '+(eb.a/rev*100).toFixed(1)+'%',dv(eb.a-eb.b)+' vs bud','m'],
-  ['PAT',crc(pat.a)+' · '+(pat.a/rev*100).toFixed(1)+'%',dv(pat.a-pat.b)+' vs bud','m'],
-  ['Material Cost',(mat.a/rev*100).toFixed(1)+'% of rev','bud '+(mat.b/revB*100).toFixed(1)+'%',''],
-  ['Manpower (Dr+Emp)',(man/rev*100).toFixed(1)+'% of rev','bud '+((doc.b+emp.b)/revB*100).toFixed(1)+'%',''],
-  ['Total Opex',(texp.a/rev*100).toFixed(1)+'% of rev','bud '+(texp.b/revB*100).toFixed(1)+'%','']
- ];
- document.getElementById('pnlcards').innerHTML=cards.map(function(c){var l=c[0],v=c[1],d=c[2],cls=c[3];
-   var cl=/vs bud/.test(d)?(/^\+/.test(d)?'up':(/^-/.test(d)?'dn':'')):'';
-   return '<div class="card '+cls+'"><div class="lbl">'+l+'</div><div class="val">'+v+'</div><div class="delta '+cl+'">'+d+'</div></div>';
- }).join('');
-
- // Waterfall
- const cr=v=>v/CR, otherOpex=texp.a-mat.a-doc.a-emp.a;
- let run=0,labels=[],ranges=[],colors=[];
- const push=(l,rng,c)=>{labels.push(l);ranges.push(rng);colors.push(c);};
- push('Revenue',[0,cr(rev)],BLUE); run=rev;
- [['Material',mat.a],['Doctor',doc.a],['Employee',emp.a],['Other Opex',otherOpex]].forEach(function(x){push(x[0],[cr(run-x[1]),cr(run)],RED);run-=x[1];});
- push('EBITDA',[0,cr(eb.a)],'#1b5e94'); run=eb.a;
- [['Depreciation',g('Depreciation').a],['Finance',g('Finance Cost').a],['Tax',g('Tax').a]].forEach(function(x){push(x[0],[cr(run-x[1]),cr(run)],RED);run-=x[1];});
- push('PAT',[0,cr(pat.a)],GREEN);
- new Chart(document.getElementById('wfChart'),{type:'bar',data:{labels:labels,datasets:[{data:ranges,backgroundColor:colors,borderRadius:3}]},
-  options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>'₹'+Math.abs(c.raw[1]-c.raw[0]).toFixed(2)+' Cr'}}},
-   scales:{y:{title:{display:true,text:'₹ Cr'}},x:{ticks:{font:{size:10},maxRotation:45,minRotation:30}}}}});
-
- // Cost drivers: top operating-cost lines, actual% vs budget% of revenue
- const costLines=lines.filter(l=>l.grp==='cost'&&!l.tot&&l.a>0).sort((a,b)=>b.a-a.a), topc=costLines.slice(0,8);
- new Chart(document.getElementById('drvChart'),{type:'bar',data:{labels:topc.map(l=>l.label),datasets:[
-   {label:'Actual % rev',data:topc.map(l=>l.a/rev*100),backgroundColor:BLUE,borderRadius:3},
-   {label:'Budget % rev',data:topc.map(l=>l.b/revB*100),backgroundColor:'rgba(139,26,74,.35)',borderRadius:3}
- ]},options:{indexAxis:'y',plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},scales:{x:{title:{display:true,text:'% of revenue'}}}}});
-
- // Cost mix doughnut (share of total opex)
- const top6=costLines.slice(0,6), restV=costLines.slice(6).reduce((s,l)=>s+l.a,0);
- const mixL=top6.map(l=>l.label).concat(restV>0?['Other']:[]), mixV=top6.map(l=>l.a/CR).concat(restV>0?[restV/CR]:[]);
- new Chart(document.getElementById('mixChart'),{type:'doughnut',data:{labels:mixL,datasets:[{data:mixV,
-   backgroundColor:[BLUE,MAROON,AMBER,GRAY,'#7aa9d0','#d08a9a','#b9c2cc']}]},
-   options:{plugins:{legend:{position:'right',labels:{boxWidth:11,font:{size:10.5}}}}}});
- document.getElementById('mixnote').textContent='Total operating cost ₹'+(texp.a/CR).toFixed(2)+' Cr in '+ml+'. Material + manpower dominate the base.';
-
- // Material Cost Bridge — volume vs mix/rate vs one-off (auto-updates each month)
- (function(){
-  const MB=D.matBridge||{}, mbM=Object.keys(MB).sort().filter(m=>P[m]&&P[m].lines);
-  const nt=document.getElementById('mbnote');
-  if(mbM.length<2){ if(nt) nt.textContent='Add a second month of P&L files to build the bridge.'; return; }
-  const base=mbM[0], last=mbM[mbM.length-1];
-  const rv=k=>{var x=P[k].lines.find(z=>z.label==='Total Revenue'); return x?x.a:0;};
-  const bT=MB[base].total,bO=MB[base].oneoff,lT=MB[last].total,lO=MB[last].oneoff;
-  const revG=rv(base)>0?(rv(last)/rv(base)-1):0;
-  const recBase=bT-bO, volume=recBase*revG, oneoff=lO-bO, mix=(lT-lO)-(recBase)-volume;
-  const cr=v=>v/CR;
-  let run=bT,labels=[],ranges=[],colors=[];
-  const pu=(l,rng,c)=>{labels.push(l);ranges.push(rng);colors.push(c);};
-  pu(mShort(base),[0,cr(bT)],BLUE);
-  [['Volume','#e34948',volume],['Mix / rate','#eb6834',mix],['One-off','#eda100',oneoff]].forEach(function(x){
-    pu(x[0],[cr(run),cr(run+x[2])],x[1]); run+=x[2];});
-  pu(mShort(last),[0,cr(lT)],'#1b5e94');
-  new Chart(document.getElementById('mbChart'),{type:'bar',data:{labels:labels,datasets:[{data:ranges,backgroundColor:colors,borderRadius:4}]},
-   options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>{var r=c.raw,t=(c.dataIndex===0||c.dataIndex===labels.length-1);return (t?'Total ₹':'Δ ₹')+((r[1]-r[0])>=0?'+':'')+(r[1]-r[0]).toFixed(2)+' Cr';}}}},
-    scales:{y:{title:{display:true,text:'₹ Cr'}},x:{ticks:{font:{size:10.5},maxRotation:30,minRotation:0}}}}});
-  document.getElementById('mbSpan').textContent=mName2(base)+' → '+mName2(last);
-  nt.innerHTML='Material cost decomposed vs '+mName2(base)+': <b>Volume</b> (base material × '+(revG*100).toFixed(0)+'% revenue growth) ₹'+dv(volume)+', '+
-    '<b>Mix / rate</b> (intensity beyond volume) ₹'+dv(mix)+', <b>One-off</b> (GST/provisions, auto-flagged) ₹'+dv(oneoff)+'. '+
-    'Ex the one-off, material is '+(((lT-lO)/rv(last))*100).toFixed(1)+'% of revenue vs '+((bT-bO)/rv(base)*100).toFixed(1)+'% in '+mShort(base)+'.';
- })();
-
- // P&L statement table
- const fav=l=>{var v=l.a-l.b, good=(l.grp==='cost')?v<=0:v>=0;
-   return '<span class="tag '+(good?'g':'r')+'">'+(good?'Fav ':'Adv ')+(v>=0?'+':'')+(v/CR).toFixed(2)+'</span>';};
- const yoy=l=>l.smly>0?(((l.a/l.smly-1)*100)>=0?'+':'')+((l.a/l.smly-1)*100).toFixed(0)+'%':'—';
- document.querySelector('#pnlTable tbody').innerHTML=lines.map(function(l){
-   var cls=l.label==='PAT'?'grand':(l.tot?'tot':(l.grp==='cost'?'sub':''));
-   return '<tr class="'+cls+'"><td class="'+(cls==='sub'?'':'lbl0')+'">'+l.label+'</td>'+
-     '<td class="r">'+(l.a/CR).toFixed(2)+'</td><td class="r">'+(l.a/rev*100).toFixed(1)+'%</td>'+
-     '<td class="r">'+(l.b/CR).toFixed(2)+'</td><td class="r">'+(l.b/revB*100).toFixed(1)+'%</td>'+
-     '<td class="r">'+fav(l)+'</td><td class="r">'+yoy(l)+'</td></tr>';
- }).join('');
-
- // Trend across all loaded months
- const cm=keys.filter(k=>P[k]&&P[k].lines);
- const lm=(k,l)=>{var x=P[k].lines.find(z=>z.label===l); return x||{a:0,b:0};};
- new Chart(document.getElementById('revTrend'),{data:{labels:cm.map(mShort),datasets:[
-   {type:'bar',label:'Actual ₹Cr',data:cm.map(k=>lm(k,'Total Revenue').a/CR),backgroundColor:BLUE,borderRadius:4},
-   {type:'bar',label:'Budget ₹Cr',data:cm.map(k=>lm(k,'Total Revenue').b/CR),backgroundColor:'rgba(139,26,74,.3)',borderRadius:4}
- ]},options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},scales:{y:{title:{display:true,text:'₹ Cr'}}}}});
- new Chart(document.getElementById('marginTrend'),{data:{labels:cm.map(mShort),datasets:[
-   {type:'bar',label:'EBITDA ₹Cr',data:cm.map(k=>lm(k,'EBITDA').a/CR),backgroundColor:'rgba(43,124,190,.75)',borderRadius:4,yAxisID:'y'},
-   {type:'line',label:'EBITDA %',data:cm.map(k=>lm(k,'EBITDA').a/lm(k,'Total Revenue').a*100),borderColor:MAROON,borderWidth:2,pointRadius:3,yAxisID:'y1'},
-   {type:'line',label:'PAT %',data:cm.map(k=>lm(k,'PAT').a/lm(k,'Total Revenue').a*100),borderColor:GREEN,borderWidth:2,borderDash:[5,4],pointRadius:3,yAxisID:'y1'}
- ]},options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},scales:{
-   y:{position:'left',title:{display:true,text:'₹ Cr'}},
-   y1:{position:'right',title:{display:true,text:'% of revenue'},grid:{drawOnChartArea:false}}}}});
- document.getElementById('mgnnote').innerHTML=cm.length>1?'EBITDA (bars) with EBITDA% and PAT% margins across '+cm.length+' months.':'Add more P&amp;L files to extend the trend.';
-
- // Commentary
- const prevK=cm.indexOf(mk)>0?cm[cm.indexOf(mk)-1]:null;
- const momRev=prevK?((rev/lm(prevK,'Total Revenue').a-1)*100):null;
- const bigc=costLines.slice(0,6).map(l=>({n:l.label,v:l.a-l.b,pa:l.a/rev*100,pb:l.b/revB*100}));
- const worst=bigc.slice().sort((a,b)=>b.v-a.v)[0], best=bigc.slice().sort((a,b)=>a.v-b.v)[0];
- document.getElementById('pnlcmnote').textContent='Auto-generated from the '+ml+' consolidated P&L close.';
- document.getElementById('pnlcmtext').innerHTML=
-   '<b>'+ml+'</b> revenue was <b>'+crc(rev)+'</b>, '+(rev>=revB?'ahead of':'behind')+' budget by ₹'+Math.abs((rev-revB)/CR).toFixed(2)+' Cr'+
-   (revS>0?' and up '+((rev/revS-1)*100).toFixed(0)+'% YoY':'')+
-   (momRev!=null?', '+(momRev>=0?'up':'down')+' '+Math.abs(momRev).toFixed(1)+'% on '+mName2(prevK):'')+'. '+
-   'EBITDA <b>'+crc(eb.a)+' ('+(eb.a/rev*100).toFixed(1)+'%)</b> vs '+(eb.b/revB*100).toFixed(1)+'% budget, and PAT <b>'+crc(pat.a)+' ('+(pat.a/rev*100).toFixed(1)+'%)</b>. '+
-   'The largest cost is <b>material at '+(mat.a/rev*100).toFixed(1)+'% of revenue</b> (budget '+(mat.b/revB*100).toFixed(1)+'%). '+
-   'Biggest adverse line: <b>'+worst.n+'</b> (₹'+Math.abs(worst.v/CR).toFixed(2)+' Cr over, '+worst.pa.toFixed(1)+'% vs '+worst.pb.toFixed(1)+'%); '+
-   'biggest saving: <b>'+best.n+'</b> (₹'+Math.abs(best.v/CR).toFixed(2)+' Cr under, '+best.pa.toFixed(1)+'% vs '+best.pb.toFixed(1)+'%).';
-}
+ '<br>Gross revenue per Daily Revenue Flash. Doctor-month figures from Daily MIS doctor sheets (newest file per month; current month is MTD — compare on ₹/day run-rate). Discharge status / ALOS / payer mix cover only dates with a flash file on hand. ARPOB = gross revenue ÷ occupied bed-days; ALOS from MIS MoM sheet. Operations include VPSLMC (satellite) figures where the source does.';
 </script></body></html>
 """
 
