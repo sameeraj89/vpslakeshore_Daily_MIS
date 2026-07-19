@@ -428,6 +428,15 @@ td.doc{max-width:190px;overflow:hidden;text-overflow:ellipsis}
 .tag{font-size:10.5px;padding:1px 7px;border-radius:10px}
 .tag.g{background:rgba(26,127,78,.12);color:var(--good)}.tag.r{background:rgba(192,57,43,.1);color:var(--bad)}.tag.y{background:rgba(127,140,155,.15);color:#5a6875}
 footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
+.findgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+.fcard{border:1px solid #e3e8ee;border-left:4px solid var(--gray);border-radius:8px;padding:11px 13px;background:#fff;box-shadow:0 1px 2px rgba(36,51,66,.05)}
+.fcard.g{border-left-color:var(--good)}.fcard.r{border-left-color:var(--bad)}.fcard.y{border-left-color:#c8952b}
+.fcard .who{font-weight:650;font-size:12.5px}
+.fcard .who .dp{font-weight:500;font-size:10.5px;color:var(--gray);margin-left:6px;text-transform:uppercase;letter-spacing:.03em}
+.fcard .claim{font-size:12px;line-height:1.5;margin:5px 0 4px;color:#33475b}
+.fcard .imp{font-size:14.5px;font-weight:700}
+.fcard.g .imp{color:var(--good)}.fcard.r .imp{color:var(--bad)}.fcard.y .imp{color:#a37a1e}
+.fcard .evid{font-size:10.5px;color:var(--gray);margin-top:4px;line-height:1.45}
 .scroll{overflow-x:auto}
 </style></head><body>
 <header><div><h1>VPS Lakeshore · Daily Revenue Dashboard</h1>
@@ -450,6 +459,10 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 <div class="panel"><h2>Volumes — OP Visits &amp; IP Discharges</h2>
 <div class="note">FY 26-27 monthly vs budget (dotted).</div><canvas id="volChart"></canvas></div>
 </div>
+
+<div class="panel"><h2>Doctor Findings — Auto-Detected Signals</h2>
+<div class="note" id="findnote"></div>
+<div class="findgrid" id="findings"></div></div>
 
 <div class="panel"><h2>Doctor League Table — Month on Month</h2>
 <div class="note" id="dlnote"></div>
@@ -666,6 +679,86 @@ if(hCur){
  document.getElementById('dlnote').innerHTML=
   `Current = <b>${mName(curM)}</b> (${dCur} days elapsed) vs previous = <b>${prevM?mName(prevM):'—'}</b> (${dPrev} days). `+
   `Revenue/visits/admissions/discharges from the Daily MIS doctor sheets. Conv % = admissions ÷ OP visits (current month). Rank Δ = movement in revenue rank vs previous month. Columns marked * come from the flash detail sheets over ${D.disDates.length} captured days: IP mix (share of doctor revenue billed as IP), New/Free OP visit shares, and from ${D.nDischarges} discharges — status, ALOS and cash mix. Click a header to sort.`;
+
+ // ---------------- auto-detected doctor findings ----------------
+ const ddC=hCur.docDaily||{}, ddP=hPrev? (hPrev.docDaily||{}):{};
+ const [fy,fm]=curM.split('-').map(Number), fmDays=new Date(fy,fm,0).getDate();
+ const dstats=(o,nd)=>{const v=[];for(let i=1;i<=nd;i++)v.push(((o&&o[String(i)])||0)/L);
+  const n=v.length,mean=v.reduce((a,b)=>a+b,0)/n;
+  const sd=Math.sqrt(v.reduce((a,b)=>a+(b-mean)*(b-mean),0)/Math.max(n-1,1));
+  return{n,mean,sd}};
+ const F=[]; let screened=0;
+ const fmtL=x=>'₹'+Math.abs(x).toFixed(1)+' L';
+ const totP=Object.values(docsP).reduce((a,v)=>a+(v.rev||0),0);
+ names.forEach(n=>{
+  const c=docsC[n]||{}, p=docsP[n]||{};
+  const rrCd=(c.rev||0)/L/dCur, rrPd=(p.rev||0)/L/dPrev;
+  if(Math.max(rrCd,rrPd)<0.3) return;
+  screened++;
+  const disp=tc(n), dept=tc(c.dept||p.dept||'');
+  // 1. appeared / gone quiet
+  if(!(p.rev)&&c.rev&&rrCd>=0.5){
+   F.push({cls:'g',doc:disp,dept,imp:rrCd*fmDays,
+    claim:`No revenue in ${mName(prevM)}, now running ₹${rrCd.toFixed(2)} L/day — new, returned from leave, or newly attributed.`,
+    evid:`₹${((c.rev||0)/L).toFixed(1)} L in ${dCur} days · ${c.opv||0} OP visits · ${c.dis||0} discharges`});
+   return;}
+  if(!(c.rev)&&p.rev&&rrPd>=0.5){
+   F.push({cls:'r',doc:disp,dept,imp:-rrPd*fmDays,
+    claim:`Zero revenue so far in ${mName(curM)} after ₹${rrPd.toFixed(2)} L/day in ${mName(prevM)} — leave, exit or attribution gap. Verify.`,
+    evid:`prev month: ₹${((p.rev||0)/L).toFixed(1)} L · ${p.opv||0} OP visits`});
+   return;}
+  // 2. significant run-rate shift, tested vs the doctor's own daily variance
+  if(c.rev&&p.rev&&hPrev){
+   const sC=dstats(ddC[n],dCur), sP=dstats(ddP[n],dPrev);
+   const se=Math.sqrt(sC.sd*sC.sd/sC.n+sP.sd*sP.sd/sP.n);
+   const dlt=sC.mean-sP.mean, z=se>0? dlt/se:0;
+   if(Math.abs(z)>=2&&Math.abs(dlt)>=0.25&&Math.abs(dlt)/Math.max(sP.mean,.01)>=0.15){
+    const opD=pct((c.opv||0)/dCur,(p.opv||1)/dPrev), dsD=pct((c.dis||0)/dCur,(p.dis||1)/dPrev);
+    const rpC=c.dis? (c.rev||0)/c.dis/L:null, rpP=p.dis? (p.rev||0)/p.dis/L:null;
+    const rpD=(rpC&&rpP)? pct(rpC,rpP):null;
+    const parts=[];
+    if(p.dis||c.dis)parts.push(['IP volume',dsD]);
+    if(rpD!=null)parts.push(['₹/discharge',rpD]);
+    if(p.opv||c.opv)parts.push(['OP volume',opD]);
+    parts.sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
+    const drvTxt=parts.length? `mainly ${parts[0][0]} (${parts[0][1]>=0?'+':''}${parts[0][1].toFixed(0)}%)`+
+      (parts[1]? `; ${parts[1][0]} ${parts[1][1]>=0?'+':''}${parts[1][1].toFixed(0)}%`:''):'driver unclear';
+    F.push({cls:dlt>0?'g':'r',doc:disp,dept,imp:dlt*fmDays,
+     claim:`Run-rate ${dlt>0?'up':'down'}: ₹${sP.mean.toFixed(2)} → ₹${sC.mean.toFixed(2)} L/day vs ${mName(prevM)} — ${drvTxt}.`,
+     evid:`z = ${z.toFixed(1)} vs own daily variance · ${dCur} vs ${dPrev} days observed`});
+    return;}
+  }
+  // 3. conversion shift on steady OP base
+  if((c.opv||0)>=60&&(p.opv||0)>=60){
+   const cvC=(c.adm||0)/c.opv*100, cvP=(p.adm||0)/p.opv*100;
+   const rp=((c.dis? (c.rev||0)/c.dis: p.dis? (p.rev||0)/p.dis:0))/L;
+   if(Math.abs(cvC-cvP)>=3&&Math.abs(cvC-cvP)/Math.max(cvP,1)>=0.25&&rp>0.3){
+    const impM=(cvC-cvP)/100*(c.opv/dCur)*fmDays*rp;
+    F.push({cls:cvC>cvP?'g':'r',doc:disp,dept,imp:impM,
+     claim:`OP→IP conversion ${cvC>cvP?'rose':'fell'} ${cvP.toFixed(1)}% → ${cvC.toFixed(1)}% on a steady OP base.`,
+     evid:`OP ${c.opv} (prev ${p.opv}) · adm ${c.adm||0} (prev ${p.adm||0}) · @ ₹${rp.toFixed(2)} L/disch`});
+    return;}
+  }
+ });
+ // 4. portfolio concentration
+ if(totC&&totP){
+  const top5=docs=>Object.values(docs).map(v=>v.rev||0).sort((a,b)=>b-a).slice(0,5).reduce((a,b)=>a+b,0);
+  const shC=top5(docsC)/totC*100, shP=top5(docsP)/totP*100;
+  if(Math.abs(shC-shP)>=2)
+   F.push({cls:'y',doc:'Portfolio',dept:'concentration',imp:0,
+    claim:`Top-5 doctors now ${shC.toFixed(0)}% of doctor-attributed revenue (${shP.toFixed(0)}% in ${mName(prevM)}) — key-person risk ${shC>shP?'rising':'easing'}.`,
+    evid:`${Object.keys(docsC).length} active doctors this month`});
+ }
+ F.sort((a,b)=>Math.abs(b.imp)-Math.abs(a.imp));
+ const FK=F.slice(0,9);
+ document.getElementById('findings').innerHTML=FK.length? FK.map(c=>
+  `<div class="fcard ${c.cls}"><div class="who">${c.doc}<span class="dp">${c.dept}</span></div>`+
+  `<div class="claim">${c.claim}</div>`+
+  (c.imp?`<div class="imp">${c.imp>0?'+':'−'}${fmtL(c.imp)} / month</div>`:'')+
+  `<div class="evid">${c.evid}</div></div>`).join(''):
+  '<div class="note">No statistically significant doctor-level shifts detected vs the previous month.</div>';
+ document.getElementById('findnote').innerHTML=
+  `Hypothesis screen: each doctor's daily revenue in <b>${mName(curM)}</b> (${dCur} days) is tested against <b>${prevM?mName(prevM):'—'}</b> using their own day-to-day variance (Welch z ≥ 2, shift ≥ ₹0.25 L/day and ≥ 15%). ${screened} doctors screened → ${F.length} findings; top ${FK.length} shown, ranked by monthly ₹ impact. Early-month results (&lt; 10 days) carry wider uncertainty.`;
 }
 let sortK='revC',sortDir=-1;
 function renderLeague(){
