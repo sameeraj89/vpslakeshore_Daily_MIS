@@ -299,6 +299,21 @@ def main():
                 daily[f"{y}-{mo:02d}"] = rows
         w.close()
 
+    # persist daily grids so months survive after their flash files are deleted
+    dgrid_path = os.path.join(tools, "daily_history.json")
+    daily_hist = {}
+    if os.path.exists(dgrid_path):
+        try: daily_hist = json.load(open(dgrid_path))
+        except Exception: daily_hist = {}
+    for mk, rows in daily.items():
+        # keep the richer version (more days) if both exist
+        if mk not in daily_hist or len(rows) >= len(daily_hist[mk]):
+            daily_hist[mk] = rows
+    json.dump(daily_hist, open(dgrid_path, "w"))
+    for mk, rows in daily_hist.items():
+        if mk not in daily:
+            daily[mk] = rows
+
     # dept/doctor day cuts + discharge lists from every flash
     dept_tot, doc_tot, dept_dates, discharges, seen_pid = {}, {}, [], [], set()
     doc_type_mix, op_agg = {}, {}
@@ -496,6 +511,7 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 <th data-k="dept">Department</th>
 <th class="r" data-k="revC">Rev cur (₹L)</th><th class="r" data-k="rrC">₹L/day cur</th>
 <th class="r" data-k="revP">Rev prev (₹L)</th><th class="r" data-k="rrP">₹L/day prev</th>
+<th class="r" data-k="revLY">LY same mo (₹L)</th><th class="r" data-k="revLYfy">LY FY total (₹L)</th>
 <th class="r" data-k="mom">Δ run-rate</th><th class="r" data-k="share">Share</th>
 <th class="r" data-k="opC">OP cur</th><th class="r" data-k="admC">Adm cur</th>
 <th class="r" data-k="disC">Disch cur</th><th class="r" data-k="conv">Conv %</th>
@@ -525,6 +541,34 @@ const pct=(a,b)=>b? ((a/b-1)*100):0;
 const BLUE='#2B7CBE',MAROON='#8B1A4A',GRAY='#7F8C9B',LT='rgba(43,124,190,.35)',GOLD='#c8952b';
 const tc=s=>s.split(' ').map(w=>w.includes('.')&&w.length<=5?w:w.charAt(0)+w.slice(1).toLowerCase()).join(' ');
 document.getElementById('asof').textContent='Data through '+D.latestDate+' · generated '+D.generated;
+
+// value labels on bars: stacked bars show one overall total; plain/grouped bars show their value; Budget bars skipped
+const valLabel={id:'valLabel',afterDatasetsDraw(chart){
+ const metas=chart.getSortedVisibleDatasetMetas().filter(m=>m.type==='bar'&&!/budget/i.test(chart.data.datasets[m.index].label||''));
+ if(!metas.length)return;
+ const ctx=chart.ctx;ctx.save();
+ const horiz=chart.options.indexAxis==='y';
+ const n=(chart.data.labels||[]).length;
+ const rot=!horiz&&n>14;
+ ctx.font='600 '+(n>14?'8.5':'10')+'px -apple-system,Segoe UI,Roboto,Arial';
+ ctx.fillStyle='#3d4a57';
+ const fv=v=>{const a=Math.abs(v);return a>=1000?Math.round(v).toLocaleString('en-IN'):a>=100?v.toFixed(0):v.toFixed(1)};
+ const draw=(val,el)=>{
+  if(!val||!el)return;
+  if(horiz){ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(fv(val),el.x+4,el.y);}
+  else if(rot){ctx.translate(el.x,el.y-3);ctx.rotate(-Math.PI/2);ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(fv(val),0,0);ctx.setTransform(1,0,0,1,0,0);}
+  else{ctx.textAlign='center';ctx.textBaseline='bottom';ctx.fillText(fv(val),el.x,el.y-3);}
+ };
+ const stacks={},plain=[];
+ metas.forEach(m=>{const s=chart.data.datasets[m.index].stack;if(s)(stacks[s]=stacks[s]||[]).push(m);else plain.push(m);});
+ Object.values(stacks).forEach(ms=>{
+  const top=ms[ms.length-1];
+  top.data.forEach((el,i)=>{let t=0;ms.forEach(m=>{t+=+chart.data.datasets[m.index].data[i]||0});draw(t,el);});
+ });
+ plain.forEach(m=>{m.data.forEach((el,i)=>draw(+chart.data.datasets[m.index].data[i],el));});
+ ctx.restore();
+}};
+Chart.register(valLabel);
 
 const fyKeys=Object.keys(D.yearTables);
 const cur=D.yearTables[fyKeys[0]]||{months:[]}, prev=D.yearTables[fyKeys[1]]||{months:[]};
@@ -810,13 +854,13 @@ window.drawMatrix=function(mk){
  const [y,m]=mk.split('-').map(Number);
  const dows=days.map(d=>'SMTWTFS'[new Date(y,m-1,d).getDay()]);
  document.querySelector('#matrix thead').innerHTML=
-  '<tr><th style="position:sticky;left:0;background:#fff;z-index:2">Doctor</th><th class="r">Total ₹L</th>'+
-  days.map((d,i)=>`<th class="r" style="min-width:44px${dows[i]==='S'?';color:#c0392b':''}">${d}<br><span style="font-weight:400">${dows[i]}</span></th>`).join('')+'</tr>';
+  '<tr><th style="position:sticky;left:0;background:#fff;z-index:2">Doctor</th>'+
+  days.map((d,i)=>`<th class="r" style="min-width:44px${dows[i]==='S'?';color:#c0392b':''}">${d}<br><span style="font-weight:400">${dows[i]}</span></th>`).join('')+
+  '<th class="r" style="position:sticky;right:0;background:#fff;z-index:2;border-left:2px solid #e3e8ee">Total ₹L</th></tr>';
  const maxAll=Math.max(...docs.slice(0,15).map(x=>Math.max(...Object.values(dd[x.n]))));
  document.querySelector('#matrix tbody').innerHTML=docs.map(x=>{
   const row=dd[x.n];
   return '<tr><td class="doc" style="position:sticky;left:0;background:#fff;z-index:1" title="'+tc(x.n)+'">'+tc(x.n)+'</td>'+
-   `<td class="r"><b>${(x.tot/L).toFixed(1)}</b></td>`+
    days.map(d=>{
     const v=row[String(d)]||0;
     if(!v) return '<td class="r" style="color:#c8d0d9">·</td>';
@@ -824,7 +868,8 @@ window.drawMatrix=function(mk){
     const bg=`rgba(43,124,190,${(0.06+a*0.5).toFixed(2)})`;
     const txt=v>=1e5? (v/L).toFixed(1) : (v/1000).toFixed(0)+'k';
     return `<td class="r" style="background:${bg}${a>0.65?';color:#fff':''}" title="₹${Math.round(v).toLocaleString('en-IN')}">${txt}</td>`;
-   }).join('')+'</tr>';
+   }).join('')+
+   `<td class="r" style="position:sticky;right:0;background:#fff;z-index:1;border-left:2px solid #e3e8ee"><b>${(x.tot/L).toFixed(1)}</b></td></tr>`;
  }).join('');
  document.getElementById('mxnote').innerHTML=
   `Billed gross revenue attributed to each doctor, by calendar day of <b>${mName(mk)}</b> (₹ Lakhs; values under ₹1 L shown as ₹’000 with “k”). Sundays in red. Top 50 doctors — use the filter for others. Note: this is billed revenue, not cash collected — the MIS does not attribute collections to doctors.`;
@@ -841,6 +886,15 @@ if(hCur){
   const r=m[k]=m[k]||{rev:0,opv:0,adm:0,dis:0};
   r.rev+=(v.rev||0);r.opv+=(v.opv||0);r.adm+=(v.adm||0);r.dis+=(v.dis||0);});return m};
  const aC=agg(hCur,dCur), aP=hPrev? agg(hPrev,dPrev):{};
+ // last-year cuts from persisted history (drop last year's end-of-month Daily MIS files to populate)
+ const [cy,cmm]=curM.split('-').map(Number);
+ const lyKey=(cy-1)+'-'+String(cmm).padStart(2,'0');
+ const aLY=D.history[lyKey]? agg(D.history[lyKey],1):{};
+ const fyStart=cmm>=4? cy: cy-1;
+ const lyFYmonths=hMonths.filter(k=>{const [y,m]=k.split('-').map(Number);return (m>=4? y: y-1)===fyStart-1;});
+ const aFY={};
+ lyFYmonths.forEach(k=>{const a=agg(D.history[k],1);
+  Object.entries(a).forEach(([d,v])=>{aFY[d]=(aFY[d]||0)+v.rev;});});
  // dept-level discharge stats via doctor->dept map
  const d2d={};Object.entries(hCur.doctors).forEach(([n,v])=>{if(v.dept)d2d[n]=v.dept});
  const dStats={};
@@ -855,6 +909,7 @@ if(hCur){
   const s=dStats[k];
   const alos=s&&s.losN? s.losSum/s.losN:null;
   return {dept:tc(k),revC:c.rev/L,rrC:rrC/L,revP:(p.rev||0)/L,rrP:rrP/L,
+   revLY:aLY[k]? aLY[k].rev/L:null, revLYfy:aFY[k]!=null? aFY[k]/L:null,
    mom:rrP? (rrC/rrP-1)*100:null, share:totC? c.rev/totC*100:null,
    opC:c.opv,admC:c.adm,disC:c.dis,
    conv:c.opv? c.adm/c.opv*100:null,
@@ -865,7 +920,8 @@ if(hCur){
  }).filter(r=>r.revC>0.5);
  document.getElementById('dtnote').innerHTML=
   `Current = <b>${mName(curM)}</b> (${dCur} days) vs <b>${prevM?mName(prevM):'—'}</b> (${dPrev} days), doctor-attributed revenue rolled up to department. `+
-  `* from flash discharge lists (captured days only). † ARPOB proxy = revenue ÷ (discharges × ALOS*) — departmental bed-days are not reported, so treat as directional. Click headers to sort.`;
+  `* from flash discharge lists (captured days only). † ARPOB proxy = revenue ÷ (discharges × ALOS*) — departmental bed-days are not reported, so treat as directional. `+
+  `LY columns need last year's end-of-month Daily MIS files in the folder (parsed once, then remembered) — “—” means not on hand yet. Click headers to sort.`;
  let sK='revC',sD=-1;
  const fmt=(v,d=1)=>v==null?'—':v.toFixed(d);
  function renderDept(){
@@ -876,6 +932,7 @@ if(hCur){
   document.querySelector('#deptTable tbody').innerHTML=rowsD.map(r=>
    `<tr><td class="doc">${r.dept}</td><td class="r"><b>${fmt(r.revC)}</b></td><td class="r">${fmt(r.rrC,2)}</td>`+
    `<td class="r">${fmt(r.revP)}</td><td class="r">${fmt(r.rrP,2)}</td>`+
+   `<td class="r">${fmt(r.revLY)}</td><td class="r">${fmt(r.revLYfy)}</td>`+
    `<td class="r">${momCell(r.mom)}</td><td class="r">${r.share==null?'—':r.share.toFixed(1)+'%'}</td>`+
    `<td class="r">${r.opC||'—'}</td><td class="r">${r.admC||'—'}</td><td class="r">${r.disC||'—'}</td>`+
    `<td class="r">${r.conv==null?'—':r.conv.toFixed(1)+'%'}</td>`+
