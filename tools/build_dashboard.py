@@ -161,6 +161,19 @@ def parse_dis_sheet(ws):
             alos=alos))
     return out
 
+def parse_flash_details(fpath):
+    """Parse one flash file's Dept wise / OP / Dis sheets -> JSON-serializable dict."""
+    w = openpyxl.load_workbook(fpath, read_only=True, data_only=True)
+    dept, doc, doctype, op, dis = {}, {}, {}, {}, []
+    if "Dept wise" in w.sheetnames:
+        dept, doc, _, doctype = parse_dept_sheet(w["Dept wise"])
+    if "OP" in w.sheetnames:
+        op = parse_op_sheet(w["OP"])
+    if "Dis" in w.sheetnames:
+        dis = parse_dis_sheet(w["Dis"])
+    w.close()
+    return {"dept": dept, "doc": doc, "doctype": doctype, "op": op, "dis": dis}
+
 # ------------------------------------------------------------ Daily MIS parsers
 def parse_doctor_day_matrix(ws, value_name):
     """Sheets laid out as [Sl, Department, Doctor, <date cols>...] -> {(dept,doc): total}."""
@@ -315,29 +328,38 @@ def main():
             daily[mk] = rows
 
     # dept/doctor day cuts + discharge lists from every flash
+    # (per-file cache keyed by name|mtime so repeat builds skip re-parsing)
+    fcache_path = os.path.join(tools, "flash_cache.json")
+    fcache = {}
+    if os.path.exists(fcache_path):
+        try: fcache = json.load(open(fcache_path))
+        except Exception: fcache = {}
     dept_tot, doc_tot, dept_dates, discharges, seen_pid = {}, {}, [], [], set()
     doc_type_mix, op_agg = {}, {}
+    fcache_dirty = False
     for d in dates:
-        w = openpyxl.load_workbook(by_date[d], read_only=True, data_only=True)
-        if "Dept wise" in w.sheetnames:
-            dept, doc, _, doctype = parse_dept_sheet(w["Dept wise"])
-            if dept:
-                dept_dates.append(d.strftime("%Y-%m-%d"))
-                for k, v in dept.items(): dept_tot[k] = dept_tot.get(k, 0) + v
-                for k, v in doc.items():  doc_tot[k] = doc_tot.get(k, 0) + v
-                for k, v in doctype.items():
-                    dd = doc_type_mix.setdefault(k, {"IP":0,"OP":0,"PH":0})
-                    for t in ("IP","OP","PH"): dd[t] += v[t]
-        if "OP" in w.sheetnames:
-            for k, v in parse_op_sheet(w["OP"]).items():
-                rec = op_agg.setdefault(k, {"new":0,"free":0,"renew":0,"tot":0})
-                for f in rec: rec[f] += v[f]
-        if "Dis" in w.sheetnames:
-            for rec in parse_dis_sheet(w["Dis"]):
-                key = (rec["pid"], rec["date"])
-                if key not in seen_pid:
-                    seen_pid.add(key); discharges.append(rec)
-        w.close()
+        fpath = by_date[d]
+        ck = f"{os.path.basename(fpath)}|{int(os.path.getmtime(fpath))}"
+        c = fcache.get(ck)
+        if c is None:
+            c = parse_flash_details(fpath)
+            fcache[ck] = c; fcache_dirty = True
+        if c["dept"]:
+            dept_dates.append(d.strftime("%Y-%m-%d"))
+            for k, v in c["dept"].items(): dept_tot[k] = dept_tot.get(k, 0) + v
+            for k, v in c["doc"].items():  doc_tot[k] = doc_tot.get(k, 0) + v
+            for k, v in c["doctype"].items():
+                dd = doc_type_mix.setdefault(k, {"IP":0,"OP":0,"PH":0})
+                for t in ("IP","OP","PH"): dd[t] += v[t]
+        for k, v in c["op"].items():
+            rec = op_agg.setdefault(k, {"new":0,"free":0,"renew":0,"tot":0})
+            for fld in rec: rec[fld] += v[fld]
+        for rec in c["dis"]:
+            key = (rec["pid"], rec["date"])
+            if key not in seen_pid:
+                seen_pid.add(key); discharges.append(rec)
+    if fcache_dirty:
+        json.dump(fcache, open(fcache_path, "w"))
 
     # ---- Daily MIS files: doctor x month granularity ----
     mis_by_date = {}
