@@ -567,6 +567,7 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <nav class="tabs">
 <button id="tabOps" class="on" onclick="showView('ops')">Daily operations</button>
 <button id="tabProj" onclick="showView('proj')">FY 26-27 projection</button>
+<button id="tabCmi" onclick="showView('cmi')">Case mix (CMI)</button>
 </nav>
 <div class="wrap view on" id="viewOps">
 <div class="cards" id="cards"></div>
@@ -685,6 +686,61 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <div class="panel"><h2>Read-across</h2>
 <div class="note">Auto-generated from the current assumption set.</div>
 <div id="pcomment" style="font-size:12.5px;line-height:1.65;color:#33475b"></div></div>
+</div>
+
+<div class="wrap view" id="viewCmi">
+<div class="panel" style="border-top:3px solid var(--maroon)">
+<h2>How this CMI is built</h2>
+<div class="note" id="cmiMethod"></div>
+<div class="ctrls" style="margin-top:10px">
+ <div class="ctrl"><span class="cl">Base for the hospital average</span>
+  <label class="sw"><input type="checkbox" id="cmiNoDay"> Exclude day-care specialties (ALOS &lt; 2 d)</label></div>
+ <div class="ctrl"><span class="cl">Cases in base</span><span class="cv" id="cmiBaseN"></span></div>
+</div>
+<div class="cards" id="cmiCards" style="margin:0"></div>
+</div>
+
+<div class="grid">
+<div class="panel"><h2>Case Mix Index by Specialty</h2>
+<div class="note">CMI = specialty ₹ per inpatient case ÷ hospital average. 1.00 = average acuity. Bars above 1.0 in blue, below in maroon.</div>
+<canvas id="cmiChart" style="max-height:520px"></canvas></div>
+<div class="panel"><h2>Case-Mix Map — Acuity vs Volume</h2>
+<div class="note">X = CMI, Y = discharges, bubble area = IP-attributed revenue. Top-right = high acuity at scale; bottom-right = high acuity, thin volume.</div>
+<canvas id="cmiScatter" style="max-height:520px"></canvas></div>
+</div>
+
+<div class="panel"><h2>Specialty Case Mix — Detail</h2>
+<div class="note" id="cmiTabNote"></div>
+<div class="scroll"><table id="cmiTable"><thead><tr>
+<th data-k="dept">Specialty</th>
+<th class="r" data-k="iprev">IP rev (₹ Cr)</th><th class="r" data-k="dis">Discharges</th>
+<th class="r" data-k="alos">ALOS</th><th class="r" data-k="rpc">₹L / case</th>
+<th class="r" data-k="cmi">CMI</th><th class="r" data-k="rpb">₹L / bed-day</th>
+<th class="r" data-k="ii">Intensity idx</th>
+<th class="r" data-k="shRev">Rev share</th><th class="r" data-k="shDis">Case share</th>
+<th class="r" data-k="mom">Δ ₹L/case MoM</th><th class="r" data-k="docs">Doctors</th>
+</tr></thead><tbody></tbody></table></div></div>
+
+<div class="panel"><h2>Doctor-Level Case Mix</h2>
+<div class="note">Same construction at doctor level. Doctors with fewer than 5 discharges in the month are hidden — per-case figures are too noisy to read below that.</div>
+<div style="margin-bottom:8px">
+<input id="cmiDocFilter" placeholder="Filter doctor / specialty…" style="padding:5px 10px;border:1px solid #d4dbe3;border-radius:6px;width:260px;font-size:12.5px">
+<span id="cmiMinBtns" style="margin-left:8px"></span></div>
+<div class="scroll" style="max-height:560px;overflow:auto"><table id="cmiDocTable"><thead><tr>
+<th data-k="doc">Doctor</th><th data-k="dept">Specialty</th>
+<th class="r" data-k="iprev">IP rev (₹ L)</th><th class="r" data-k="dis">Disch</th>
+<th class="r" data-k="alos">ALOS</th><th class="r" data-k="rpc">₹L / case</th>
+<th class="r" data-k="cmi">CMI</th><th class="r" data-k="rpb">₹L / bed-day</th>
+<th class="r" data-k="ii">Intensity idx</th><th class="r" data-k="cash">Cash mix</th>
+</tr></thead><tbody></tbody></table></div></div>
+
+<div class="panel"><h2>Excluded from the index</h2>
+<div class="note">Service and non-admitting departments carry attributed revenue but few or no discharges of their own, so a per-case figure would be meaningless. They are excluded from the index and from the hospital average, but their revenue is listed here so the reconciliation is visible.</div>
+<div id="cmiExcl" style="font-size:12px"></div></div>
+
+<div class="panel"><h2>Read-across</h2>
+<div class="note">Auto-generated from the current month's case mix.</div>
+<div id="cmiComment" style="font-size:12.5px;line-height:1.65;color:#33475b"></div></div>
 </div>
 
 <div class="wrap" style="padding-top:0"><footer id="foot"></footer></div>
@@ -1150,12 +1206,14 @@ document.getElementById('foot').innerHTML='<b>Files parsed:</b> '+D.filesParsed.
  (D.aop? '<br><b>FY 26-27 projection tab:</b> AOP plan from '+D.aop.source+' (\'Monthly P&L\'). Plan line = IP + OP revenue, which is what the flash gross figure covers; the plan\'s F&amp;B (₹'+((D.aop.fyPlanTotal-D.aop.fyPlanRev)/CR).toFixed(1)+' Cr incl. other income) is excluded so the comparison is like-for-like. Projection is a run-rate extrapolation, not a bottom-up build — it holds current realization and payer mix flat.':'');
 
 // ============================ FY 26-27 PROJECTION TAB ============================
+const VIEWS={ops:'Ops',proj:'Proj',cmi:'Cmi'};
 function showView(v){
- ['ops','proj'].forEach(k=>{
-  document.getElementById('view'+k[0].toUpperCase()+k.slice(1)).classList.toggle('on',k===v);
-  document.getElementById('tab'+(k==='ops'?'Ops':'Proj')).classList.toggle('on',k===v);
+ Object.keys(VIEWS).forEach(k=>{
+  document.getElementById('view'+VIEWS[k]).classList.toggle('on',k===v);
+  document.getElementById('tab'+VIEWS[k]).classList.toggle('on',k===v);
  });
  if(v==='proj') setTimeout(drawProj,30);
+ if(v==='cmi') setTimeout(window.drawCmi,30);
 }
 
 const MO=['April','May','June','July','August','September','October','November','December','January','February','March'];
@@ -1337,6 +1395,223 @@ function drawProj(){
   drawProj();});
  document.getElementById('rampS').oninput=drawProj;
  document.getElementById('seasS').onchange=drawProj;
+})();
+
+// ============================ CASE MIX (CMI) TAB ============================
+// CMI proxy = specialty IP-attributed revenue per discharge, indexed to the
+// hospital average over admitting specialties only. No DRG weights exist in the
+// source, so acuity is inferred from billed intensity per case.
+(function(){
+ const BAD=/^(GRAND TOTAL|TOTAL|CHEMOTHERAPY|EXECUTIVE HEALTH)$/i;
+ const MINDIS_DEPT=10;
+ let minDoc=5;
+
+ // per-doctor IP-attributed revenue: IP service revenue + pharmacy apportioned
+ // by that doctor's IP share of service revenue
+ function docIp(dn,rec){
+  const t=D.docTypeMix[dn]||{}, ip=t.IP||0, op=t.OP||0, ph=t.PH||0, svc=ip+op;
+  const sh=svc>0? ip/svc : (rec.dis>0?1:0);
+  return ip+ph*sh;
+ }
+ function alosOf(dn){const l=D.disByDoc[dn]; return (l&&l.losN)? l.losSum/l.losN : 0;}
+ function cashOf(dn){const l=D.disByDoc[dn]; return (l&&l.n)? l.cash/l.n : null;}
+
+ function deptAgg(mk){
+  const H=(D.history[mk]||{}).doctors||{}, out={};
+  Object.keys(H).forEach(dn=>{
+   const r=H[dn]; if(BAD.test((r.dept||'').trim())) return;
+   const o=out[r.dept]=out[r.dept]||{dept:r.dept,rev:0,iprev:0,dis:0,bd:0,docs:0};
+   o.rev+=r.rev; o.iprev+=docIp(dn,r); o.dis+=r.dis; o.bd+=alosOf(dn)*r.dis; o.docs++;
+  });
+  return out;
+ }
+
+ function model(){
+  const A=deptAgg(curM), P=prevM? deptAgg(prevM):{};
+  const adm=Object.values(A).filter(d=>d.dis>=MINDIS_DEPT);
+  const exc=Object.values(A).filter(d=>d.dis<MINDIS_DEPT);
+  const noDay=document.getElementById('cmiNoDay').checked;
+  const inBase=d=>!noDay || (d.dis? d.bd/d.dis:0)>=2;
+  const base=adm.filter(inBase);
+  const TI=base.reduce((a,d)=>a+d.iprev,0), TD=base.reduce((a,d)=>a+d.dis,0),
+        TB=base.reduce((a,d)=>a+d.bd,0);
+  const avgC=TD? TI/TD:0, avgB=TB? TI/TB:0;
+  const pAdm=Object.values(P).filter(d=>d.dis>=MINDIS_DEPT&&inBase(d));
+  const pTI=pAdm.reduce((a,d)=>a+d.iprev,0), pTD=pAdm.reduce((a,d)=>a+d.dis,0);
+  const rows=adm.map(d=>{
+   const al=d.dis? d.bd/d.dis:0;
+   const rpc=d.iprev/d.dis, rpb=(d.bd&&al>=1)? d.iprev/d.bd:0, p=P[d.dept];
+   return {dept:d.dept,iprev:d.iprev,dis:d.dis,docs:d.docs,inBase:inBase(d),
+     alos:al,rpc:rpc,cmi:avgC? rpc/avgC:0,
+     rpb:rpb,ii:(avgB&&rpb)? rpb/avgB:0,
+     shRev:TI? d.iprev/TI:0,shDis:TD? d.dis/TD:0,
+     mom:(p&&p.dis>=MINDIS_DEPT)? rpc-(p.iprev/p.dis) : null};
+  }).sort((a,b)=>b.iprev-a.iprev);
+  const docs=[];
+  const H=(D.history[curM]||{}).doctors||{};
+  Object.keys(H).forEach(dn=>{
+   const r=H[dn]; if(BAD.test((r.dept||'').trim())||r.dis<minDoc) return;
+   const ipr=docIp(dn,r), al=alosOf(dn), bd=(al>=1)? al*r.dis : 0;
+   docs.push({doc:dn,dept:r.dept,iprev:ipr,dis:r.dis,alos:al,
+     rpc:ipr/r.dis,cmi:avgC?(ipr/r.dis)/avgC:0,
+     rpb:bd? ipr/bd:0,ii:(avgB&&bd)?(ipr/bd)/avgB:0,cash:cashOf(dn)});
+  });
+  docs.sort((a,b)=>b.cmi-a.cmi);
+  return {rows:rows,docs:docs,exc:exc.sort((a,b)=>b.rev-a.rev),
+    excRev:exc.reduce((a,d)=>a+d.rev,0),
+    TI:TI,TD:TD,TB:TB,avgC:avgC,avgB:avgB,noDay:noDay,
+    nBase:base.length,nAdm:adm.length,
+    momAvg:(pTD&&pTI)? avgC/(pTI/pTD)-1 : null,
+    grossRev:mtd.revTot||0};
+ }
+
+ let ch={},sortK='iprev',sortA=false,dSortK='cmi',dSortA=false;
+ function render(){
+  const M=model(), rows=M.rows;
+  document.getElementById('cmiMethod').innerHTML=
+   'No DRG or relative-weight field exists in the flash or the Daily MIS, so this is an <b>billed-intensity proxy</b>, not a coded CMI. '+
+   'For each doctor, IP-attributed revenue = IP service revenue + pharmacy apportioned by that doctor\'s IP share of service revenue. '+
+   'Rolled to specialty, divided by discharges, then indexed to the hospital average across <b>admitting specialties only</b> '+
+   '(≥'+MINDIS_DEPT+' discharges in the month). Month: <b>'+mName(curM)+'</b>, '+D.history[curM].daysElapsed+' days elapsed. '+
+   'ALOS is the discharge-level average from the flash <i>Dis</i> sheets, so it covers only dates with a flash file on hand; ₹/bed-day is suppressed where ALOS is under 1 day. '+
+   '<b>The MoM column and the MoM card apply this month\'s IP/OP mix ratios and ALOS to last month\'s revenue and discharges</b>, because the flash detail sheets only cover the current month — so treat the MoM figures as directional on volume and case value, not on mix shift.';
+
+  document.getElementById('cmiBaseN').textContent=M.TD+' cases · '+M.nBase+' of '+M.nAdm+' specialties';
+  const top=rows.slice().sort((a,b)=>b.cmi-a.cmi)[0], bot=rows.slice().sort((a,b)=>a.cmi-b.cmi)[0];
+  const cards=[
+   ['Hospital ₹ / case','₹'+(M.avgC/L).toFixed(2)+' L',M.momAvg!=null?
+     ((M.momAvg>=0?'▲ +':'▼ ')+(M.momAvg*100).toFixed(1)+'% vs '+mName(prevM)):'no prior month',M.momAvg==null||M.momAvg>=0],
+   ['Blended ALOS',(M.TB/M.TD).toFixed(2)+' d','MoM sheet ALOS '+((D.momFY[curM]&&D.momFY[curM].alos)?D.momFY[curM].alos.toFixed(2):'—')+' d',true],
+   ['₹ / bed-day','₹'+(M.avgB/L).toFixed(2)+' L','across '+Math.round(M.TB).toLocaleString('en-IN')+' bed-days',true],
+   ['Highest acuity',top? top.dept.slice(0,20):'—',top? 'CMI '+top.cmi.toFixed(2)+' · '+top.dis+' cases':'',true],
+   ['Lowest acuity',bot? bot.dept.slice(0,20):'—',bot? 'CMI '+bot.cmi.toFixed(2)+' · '+bot.dis+' cases':'',false],
+   ['In-index coverage',(M.TI/(M.TI+M.excRev)*100).toFixed(0)+'%',
+     rows.length+' admitting specialties · '+M.TD+' cases',true]
+  ];
+  document.getElementById('cmiCards').innerHTML=cards.map((c,n)=>
+   '<div class="card'+(n<3?'':' m')+'"><div class="lbl">'+c[0]+'</div><div class="val" style="font-size:'+
+   (typeof c[1]==='string'&&c[1].length>12?'15px':'21px')+'">'+c[1]+'</div><div class="delta '+(c[3]?'up':'dn')+'">'+c[2]+'</div></div>').join('');
+
+  // CMI bar chart
+  const cs=rows.slice().sort((a,b)=>b.cmi-a.cmi);
+  if(ch.b)ch.b.destroy();
+  ch.b=new Chart(document.getElementById('cmiChart'),{type:'bar',
+   data:{labels:cs.map(r=>tc(r.dept)),datasets:[{data:cs.map(r=>r.cmi),
+    backgroundColor:cs.map(r=>r.cmi>=1?BLUE:MAROON),borderRadius:3}]},
+   options:{indexAxis:'y',plugins:{legend:{display:false},
+    tooltip:{callbacks:{label:c=>'CMI '+(+c.raw).toFixed(2)+' · ₹'+(cs[c.dataIndex].rpc/L).toFixed(2)+' L/case · '+cs[c.dataIndex].dis+' cases'}}},
+    scales:{x:{title:{display:true,text:'Case Mix Index (1.00 = hospital average)'},
+      grid:{color:ctx=>Math.abs(ctx.tick.value-1)<0.001?'#243342':'rgba(0,0,0,.06)'}},
+     y:{ticks:{font:{size:10}}}}}});
+
+  // scatter
+  const mx=Math.max.apply(null,rows.map(r=>r.iprev))||1;
+  if(ch.s)ch.s.destroy();
+  ch.s=new Chart(document.getElementById('cmiScatter'),{type:'bubble',
+   data:{datasets:[{data:rows.map(r=>({x:r.cmi,y:r.dis,r:6+22*Math.sqrt(r.iprev/mx),d:r})),
+    backgroundColor:rows.map(r=>r.cmi>=1?'rgba(43,124,190,.45)':'rgba(139,26,74,.4)'),
+    borderColor:rows.map(r=>r.cmi>=1?BLUE:MAROON),borderWidth:1.3}]},
+   options:{plugins:{legend:{display:false},tooltip:{callbacks:{
+     label:c=>{const d=c.raw.d;return [tc(d.dept),'CMI '+d.cmi.toFixed(2)+' · '+d.dis+' cases',
+       '₹'+(d.iprev/CR).toFixed(2)+' Cr · ALOS '+d.alos.toFixed(1)+' d'];}}}},
+    scales:{x:{title:{display:true,text:'CMI'},min:0,
+      grid:{color:ctx=>Math.abs(ctx.tick.value-1)<0.001?'#243342':'rgba(0,0,0,.06)'}},
+     y:{title:{display:true,text:'discharges in month'},beginAtZero:true}},
+    layout:{padding:24}}});
+
+  // dept table
+  document.getElementById('cmiTabNote').innerHTML='Hospital average this month is <b>₹'+(M.avgC/L).toFixed(2)+
+   ' L per case</b> over '+M.TD+' discharges. Intensity index does the same on a per-bed-day basis, so it rewards short-stay throughput where CMI does not. Click a header to sort.';
+  const srt=rows.slice().sort((a,b)=>{const x=a[sortK],y=b[sortK];
+   if(typeof x==='string')return sortA? x.localeCompare(y):y.localeCompare(x);
+   return sortA? (x||0)-(y||0):(y||0)-(x||0);});
+  const idxTag=v=>'<span class="tag '+(v>=1.15?'g':v<0.85?'r':'y')+'">'+v.toFixed(2)+'</span>';
+  document.querySelector('#cmiTable tbody').innerHTML=srt.map(r=>
+   '<tr'+(r.inBase?'':' style="opacity:.6"')+'><td class="doc">'+tc(r.dept)+
+   (r.inBase?'':' <span class="tag y">day-care</span>')+'</td>'+
+   '<td class="r">'+(r.iprev/CR).toFixed(2)+'</td><td class="r">'+r.dis+'</td>'+
+   '<td class="r">'+r.alos.toFixed(2)+'</td><td class="r">'+(r.rpc/L).toFixed(2)+'</td>'+
+   '<td class="r">'+idxTag(r.cmi)+'</td><td class="r">'+(r.rpb?(r.rpb/L).toFixed(3):'—')+'</td>'+
+   '<td class="r">'+(r.ii?idxTag(r.ii):'—')+'</td>'+
+   '<td class="r">'+(r.shRev*100).toFixed(1)+'%</td><td class="r">'+(r.shDis*100).toFixed(1)+'%</td>'+
+   '<td class="r">'+(r.mom==null?'—':'<span class="tag '+(r.mom>=0?'g':'r')+'">'+(r.mom>=0?'+':'')+(r.mom/L).toFixed(2)+'</span>')+'</td>'+
+   '<td class="r">'+r.docs+'</td></tr>').join('')+
+   '<tr class="fytot"><td>All admitting specialties</td><td class="r">'+(M.TI/CR).toFixed(2)+'</td>'+
+   '<td class="r">'+M.TD+'</td><td class="r">'+(M.TB/M.TD).toFixed(2)+'</td>'+
+   '<td class="r">'+(M.avgC/L).toFixed(2)+'</td><td class="r">1.00</td>'+
+   '<td class="r">'+(M.avgB/L).toFixed(3)+'</td><td class="r">1.00</td>'+
+   '<td class="r">100%</td><td class="r">100%</td><td class="r"></td>'+
+   '<td class="r">'+rows.reduce((a,r)=>a+r.docs,0)+'</td></tr>';
+
+  // doctor table
+  const q=(document.getElementById('cmiDocFilter').value||'').toLowerCase();
+  const ds=M.docs.filter(d=>!q||d.doc.toLowerCase().includes(q)||d.dept.toLowerCase().includes(q))
+   .sort((a,b)=>{const x=a[dSortK],y=b[dSortK];
+    if(typeof x==='string')return dSortA? x.localeCompare(y):y.localeCompare(x);
+    return dSortA? (x||0)-(y||0):(y||0)-(x||0);});
+  document.querySelector('#cmiDocTable tbody').innerHTML=ds.map(d=>
+   '<tr><td class="doc">'+tc(d.doc)+'</td><td class="doc">'+tc(d.dept)+'</td>'+
+   '<td class="r">'+(d.iprev/L).toFixed(1)+'</td><td class="r">'+d.dis+'</td>'+
+   '<td class="r">'+(d.alos?d.alos.toFixed(1):'—')+'</td><td class="r">'+(d.rpc/L).toFixed(2)+'</td>'+
+   '<td class="r">'+idxTag(d.cmi)+'</td><td class="r">'+(d.rpb?(d.rpb/L).toFixed(3):'—')+'</td>'+
+   '<td class="r">'+(d.ii?idxTag(d.ii):'—')+'</td>'+
+   '<td class="r">'+(d.cash==null?'—':(d.cash*100).toFixed(0)+'%')+'</td></tr>').join('');
+
+  // excluded
+  document.getElementById('cmiExcl').innerHTML=M.exc.map(d=>
+   '<span class="pill">'+tc(d.dept)+' · ₹'+(d.rev/CR).toFixed(2)+' Cr · '+d.dis+' disch</span>').join('')+
+   '<div style="margin-top:8px;color:#7F8C9B;font-size:11.5px">Excluded revenue ₹'+
+   (M.excRev/CR).toFixed(2)+' Cr of ₹'+((M.TI+M.excRev)/CR).toFixed(2)+
+   ' Cr doctor-attributed. Gross revenue for the month per the flash is ₹'+(M.grossRev/CR).toFixed(2)+
+   ' Cr — the gap is unallocated, non-doctor and OP-only revenue.</div>';
+
+  // commentary
+  const hiVol=rows.filter(r=>r.shDis>=0.04);
+  const pull=hiVol.slice().sort((a,b)=>b.cmi-a.cmi)[0];
+  const drag=hiVol.slice().sort((a,b)=>a.cmi-b.cmi)[0];
+  const mism=rows.slice().sort((a,b)=>(b.ii-b.cmi)-(a.ii-a.cmi))[0];
+  const mover=rows.filter(r=>r.mom!=null).sort((a,b)=>Math.abs(b.mom)-Math.abs(a.mom))[0];
+  document.getElementById('cmiComment').innerHTML=
+   'Hospital billed intensity is <b>₹'+(M.avgC/L).toFixed(2)+' L per inpatient case</b> at a blended ALOS of '+
+   (M.TB/M.TD).toFixed(2)+' days'+(M.momAvg!=null? ', '+(M.momAvg>=0?'up':'down')+' '+
+   Math.abs(M.momAvg*100).toFixed(1)+'% on '+mName(prevM):'')+'. '+
+   (pull? 'Among specialties carrying at least 4% of cases, <b>'+tc(pull.dept)+'</b> lifts the mix hardest (CMI '+
+    pull.cmi.toFixed(2)+' on '+pull.dis+' cases) while <b>'+tc(drag.dept)+'</b> dilutes it most (CMI '+
+    drag.cmi.toFixed(2)+' on '+drag.dis+' cases). ':'')+
+   (mism&&mism.ii-mism.cmi>0.3? '<b>'+tc(mism.dept)+'</b> is the clearest case of CMI understating economics — index '+
+    mism.cmi.toFixed(2)+' per case but '+mism.ii.toFixed(2)+' per bed-day, i.e. short-stay throughput rather than low acuity. ':'')+
+   (mover? 'Largest MoM move: <b>'+tc(mover.dept)+'</b> at '+(mover.mom>=0?'+':'')+'₹'+
+    (mover.mom/L).toFixed(2)+' L per case. ':'')+
+   '<span style="color:#7F8C9B">Caveat: billed intensity is not coded acuity. A specialty can score high because it uses expensive consumables or implants rather than because its patients are sicker, and pharmacy apportionment uses each doctor\'s IP revenue share as the key. Day-care-heavy specialties such as medical oncology and dialysis will read low on CMI and high on the intensity index by construction — read the two together, never CMI alone.</span>';
+ }
+
+ window.drawCmi=render;
+ document.getElementById('cmiDocFilter').oninput=render;
+ document.getElementById('cmiNoDay').onchange=render;
+ document.getElementById('cmiMinBtns').innerHTML=[3,5,10].map(n=>
+  '<button class="rbtn'+(n===minDoc?' on':'')+'" data-n="'+n+'">min '+n+' disch</button>').join('');
+ document.querySelectorAll('#cmiMinBtns .rbtn').forEach(b=>b.onclick=()=>{
+  minDoc=+b.dataset.n;
+  document.querySelectorAll('#cmiMinBtns .rbtn').forEach(x=>x.classList.toggle('on',x===b));
+  render();});
+ document.querySelectorAll('#cmiTable thead th').forEach(t=>t.onclick=()=>{
+  const k=t.dataset.k; if(!k)return; if(k===sortK)sortA=!sortA; else{sortK=k;sortA=false;} render();});
+ document.querySelectorAll('#cmiDocTable thead th').forEach(t=>t.onclick=()=>{
+  const k=t.dataset.k; if(!k)return; if(k===dSortK)dSortA=!dSortA; else{dSortK=k;dSortA=false;} render();});
+
+ // headline card on the operations tab
+ (function(){
+  const M=model();
+  const el=document.getElementById('cards');
+  if(!el||!M.TD)return;
+  const d=document.createElement('div');
+  d.className='card m';
+  d.innerHTML='<div class="lbl">Case Mix — ₹/case</div><div class="val">₹'+(M.avgC/L).toFixed(2)+' L</div>'+
+   '<div class="delta '+((M.momAvg==null||M.momAvg>=0)?'up':'dn')+'">ALOS '+(M.TB/M.TD).toFixed(2)+' d · '+
+   (M.momAvg!=null?((M.momAvg>=0?'▲ +':'▼ ')+(M.momAvg*100).toFixed(1)+'% MoM'):'no prior month')+
+   ' · <a href="#" onclick="showView(\'cmi\');return false;" style="color:#2B7CBE">detail</a></div>';
+  el.appendChild(d);
+ })();
 })();
 </script></body></html>
 """
