@@ -241,6 +241,54 @@ def parse_mom_fy(ws):
                     out[m][key] = float(r[j])
     return {m: v for m, v in out.items() if v}
 
+# ------------------------------------------------------------------- FY27 AOP
+# Operative plan: BRM_Deck/AOP/Final Final AOP/AOP_vMay26_v2.xlsx -> 'Monthly P&L'
+# All figures already in Rs Crore. IP+OP is the line comparable to flash gross
+# revenue (flash Pharmacy sits inside AOP IP/OP); F&B and Other Income are shown
+# separately because the flash excludes them.
+AOP_GLOB = "BRM_Deck/AOP/Final Final AOP/AOP_vMay26_v2.xlsx"
+AOP_MONTHS = ["April", "May", "June", "July", "August", "September",
+              "October", "November", "December", "January", "February", "March"]
+
+def find_aop(folder):
+    """Walk up from the MIS folder looking for the AOP workbook."""
+    d = os.path.abspath(folder)
+    for _ in range(5):
+        cand = os.path.join(d, AOP_GLOB)
+        if os.path.exists(cand): return cand
+        hits = glob.glob(os.path.join(d, "**", "AOP_vMay26_v2.xlsx"), recursive=True)
+        if hits: return hits[0]
+        d = os.path.dirname(d)
+    return None
+
+def parse_aop(path):
+    """'Monthly P&L' -> {'source','fyPlan','fy26Actual','months':[{month,ip,op,fnb,other,total}]}
+    Row labels in col A; Apr-26..Mar-27 in cols D..O (3..14); col 1 = FY26 actual,
+    col 2 = FY27 plan. Values are Rs Crore -> stored as absolute INR for the UI."""
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb["Monthly P&L"]
+    rows = list(ws.iter_rows(values_only=True, max_row=40, max_col=16))
+    wb.close()
+    want = {"IP Revenue": "ip", "OP Revenue": "op", "F&B / VPS Gourmet": "fnb",
+            "Other Income": "other", "Total Revenue": "total"}
+    got, fy26, fyplan = {}, {}, {}
+    for r in rows:
+        lbl = str(r[0]).strip() if r[0] else ""
+        if lbl not in want: continue
+        k = want[lbl]
+        got[k] = [num(r[3 + i]) * 1e7 for i in range(12)]
+        fy26[k] = num(r[1]) * 1e7
+        fyplan[k] = num(r[2]) * 1e7
+    if "total" not in got: return None
+    months = [{"month": AOP_MONTHS[i],
+               **{k: got.get(k, [0] * 12)[i] for k in ("ip", "op", "fnb", "other", "total")}}
+              for i in range(12)]
+    for m in months: m["rev"] = m["ip"] + m["op"]          # flash-comparable
+    return {"source": os.path.basename(path), "months": months,
+            "fyPlan": fyplan, "fy26Actual": fy26,
+            "fyPlanRev": sum(m["rev"] for m in months),
+            "fyPlanTotal": sum(m["total"] for m in months)}
+
 # ---------------------------------------------------------------------- main
 def main():
     folder = sys.argv[1] if len(sys.argv) > 1 else \
@@ -410,6 +458,24 @@ def main():
         dd["status"][rec["status"]] = dd["status"].get(rec["status"], 0) + 1
         if rec["scheme"] == "Cash": dd["cash"] += 1
 
+    # ---- FY27 AOP plan (cached so the tab survives if the file moves) ----
+    aop_cache = os.path.join(tools, "aop_fy27.json")
+    aop = None
+    ap = find_aop(folder)
+    if ap:
+        try:
+            aop = parse_aop(ap)
+            if aop: json.dump(aop, open(aop_cache, "w"))
+            print("AOP parsed from", os.path.basename(ap),
+                  "| FY27 plan IP+OP %.1f Cr" % (aop["fyPlanRev"] / 1e7))
+        except Exception as e:
+            print("AOP parse failed:", e)
+    if not aop and os.path.exists(aop_cache):
+        try:
+            aop = json.load(open(aop_cache)); print("AOP from cache")
+        except Exception: aop = None
+    if not aop: print("WARNING: no FY27 AOP available; projection tab will hide plan columns")
+
     data = dict(
         generated=datetime.datetime.now().strftime("%d %b %Y %H:%M"),
         latestDate=latest_date.strftime("%d %b %Y"),
@@ -423,6 +489,7 @@ def main():
         docTypeMix=doc_type_mix, opAgg=op_agg,
         disDates=sorted({r["date"] for r in discharges}),
         nDischarges=len(discharges),
+        aop=aop,
     )
     out = os.path.join(folder, "LHRC_Revenue_Dashboard.html")
     open(out, "w", encoding="utf-8").write(TEMPLATE.replace("__DATA__", json.dumps(data)))
@@ -475,11 +542,33 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 .fcard.g .imp{color:var(--good)}.fcard.r .imp{color:var(--bad)}.fcard.y .imp{color:#a37a1e}
 .fcard .evid{font-size:10.5px;color:var(--gray);margin-top:4px;line-height:1.45}
 .scroll{overflow-x:auto}
+.tabs{background:#1b5e94;padding:0 28px;display:flex;gap:2px}
+.tabs button{background:none;border:0;border-bottom:3px solid transparent;color:rgba(255,255,255,.72);
+ padding:10px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.tabs button:hover{color:#fff}
+.tabs button.on{color:#fff;border-bottom-color:#fff}
+.view{display:none}.view.on{display:block}
+.ctrls{display:flex;flex-wrap:wrap;gap:20px;align-items:center;background:#f0f5fa;
+ border:1px solid #dde6ef;border-radius:8px;padding:12px 16px;margin-bottom:16px}
+.ctrl{display:flex;flex-direction:column;gap:4px}
+.ctrl .cl{font-size:10.5px;color:var(--gray);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.ctrl .cv{font-size:12.5px;font-weight:650;color:var(--blue)}
+.ctrl input[type=range]{width:170px;accent-color:var(--blue)}
+.sw{display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer;user-select:none}
+.rbtn{border:1px solid #d4dbe3;background:#fff;color:#243342;border-radius:6px;padding:3px 10px;
+ cursor:pointer;font-size:12px;font-family:inherit}
+.rbtn.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+tr.pastm td{background:#fafcfe;color:#5a6875}
+tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 </style></head><body>
 <header><div><h1>VPS Lakeshore · Daily Revenue Dashboard</h1>
 <div class="sub">Lakeshore Hospital &amp; Research Centre Ltd, Kochi · Global Lifecare</div></div>
 <div class="sub" id="asof"></div></header>
-<div class="wrap">
+<nav class="tabs">
+<button id="tabOps" class="on" onclick="showView('ops')">Daily operations</button>
+<button id="tabProj" onclick="showView('proj')">FY 26-27 projection</button>
+</nav>
+<div class="wrap view on" id="viewOps">
 <div class="cards" id="cards"></div>
 
 <div class="panel"><h2>Daily Gross Revenue — Actual vs Budget</h2>
@@ -553,8 +642,52 @@ footer{font-size:11px;color:var(--gray);margin-top:26px;line-height:1.6}
 <div class="panel"><h2>Department Revenue — Captured Flash Days</h2>
 <div class="note" id="deptnote"></div><canvas id="deptChart" style="max-height:400px"></canvas></div>
 </div>
-<footer id="foot"></footer>
 </div>
+
+<div class="wrap view" id="viewProj">
+<div class="panel" style="border-top:3px solid var(--maroon)">
+<h2>Projection assumptions</h2>
+<div class="note">Closed months are actual. The current month is month-to-date banked revenue plus remaining days at the run-rate. Aug onward is run-rate &times; calendar days, flexed by the options below.</div>
+<div class="ctrls">
+ <div class="ctrl"><span class="cl">Run-rate window</span>
+  <span id="rrBtns"></span></div>
+ <div class="ctrl"><span class="cl">Run-rate used</span><span class="cv" id="rrVal"></span></div>
+ <div class="ctrl"><span class="cl">Monthly ramp</span>
+  <input type="range" id="rampS" min="-2" max="5" step="0.25" value="1.25">
+  <span class="cv" id="rampVal"></span></div>
+ <div class="ctrl"><span class="cl">Seasonality</span>
+  <label class="sw"><input type="checkbox" id="seasS" checked> Apply FY 25-26 monthly shape</label></div>
+</div>
+<div class="cards" id="pcards" style="margin:0"></div>
+</div>
+
+<div class="panel"><h2>FY 26-27 Revenue — Actual, Projected and AOP Plan</h2>
+<div class="note" id="pchartnote"></div><canvas id="projChart" style="max-height:360px"></canvas></div>
+
+<div class="grid">
+<div class="panel"><h2>Cumulative Landing Zone vs Plan</h2>
+<div class="note">Cumulative ₹ Cr through the year. Shaded gap = projection minus AOP plan.</div>
+<canvas id="cumChart"></canvas></div>
+<div class="panel"><h2>Scenario Fan — FY Total by Ramp</h2>
+<div class="note">FY 26-27 total at each monthly ramp setting, holding the selected run-rate window and seasonality. Marker = current setting.</div>
+<canvas id="fanChart"></canvas></div>
+</div>
+
+<div class="panel"><h2>Monthly Build</h2>
+<div class="note" id="ptabnote"></div>
+<div class="scroll"><table id="projTable"><thead><tr>
+<th>Month</th><th class="r">Days</th><th class="r">Seas. idx</th>
+<th class="r">FY 25-26 (₹ Cr)</th><th class="r">AOP plan (₹ Cr)</th>
+<th class="r">Actual / projected (₹ Cr)</th><th class="r">₹ Cr/day</th>
+<th class="r">vs AOP (₹ Cr)</th><th class="r">vs FY 25-26 (₹ Cr)</th><th>Basis</th>
+</tr></thead><tbody></tbody></table></div></div>
+
+<div class="panel"><h2>Read-across</h2>
+<div class="note">Auto-generated from the current assumption set.</div>
+<div id="pcomment" style="font-size:12.5px;line-height:1.65;color:#33475b"></div></div>
+</div>
+
+<div class="wrap" style="padding-top:0"><footer id="foot"></footer></div>
 <script>
 const D = __DATA__;
 const CR=1e7, L=1e5;
@@ -1013,7 +1146,198 @@ new Chart(document.getElementById('deptChart'),{type:'bar',data:{labels:D.deptTo
  options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{title:{display:true,text:'₹ Lakhs'}},y:{ticks:{font:{size:10.5}}}}}});
 
 document.getElementById('foot').innerHTML='<b>Files parsed:</b> '+D.filesParsed.map(f=>'<span class="pill">'+f+'</span>').join('')+
- '<br>Gross revenue per Daily Revenue Flash. Doctor-month figures from Daily MIS doctor sheets (newest file per month; current month is MTD — compare on ₹/day run-rate). Discharge status / ALOS / payer mix cover only dates with a flash file on hand. ARPOB = gross revenue ÷ occupied bed-days; ALOS from MIS MoM sheet. Operations include VPSLMC (satellite) figures where the source does.';
+ '<br>Gross revenue per Daily Revenue Flash. Doctor-month figures from Daily MIS doctor sheets (newest file per month; current month is MTD — compare on ₹/day run-rate). Discharge status / ALOS / payer mix cover only dates with a flash file on hand. ARPOB = gross revenue ÷ occupied bed-days; ALOS from MIS MoM sheet. Operations include VPSLMC (satellite) figures where the source does.'+
+ (D.aop? '<br><b>FY 26-27 projection tab:</b> AOP plan from '+D.aop.source+' (\'Monthly P&L\'). Plan line = IP + OP revenue, which is what the flash gross figure covers; the plan\'s F&amp;B (₹'+((D.aop.fyPlanTotal-D.aop.fyPlanRev)/CR).toFixed(1)+' Cr incl. other income) is excluded so the comparison is like-for-like. Projection is a run-rate extrapolation, not a bottom-up build — it holds current realization and payer mix flat.':'');
+
+// ============================ FY 26-27 PROJECTION TAB ============================
+function showView(v){
+ ['ops','proj'].forEach(k=>{
+  document.getElementById('view'+k[0].toUpperCase()+k.slice(1)).classList.toggle('on',k===v);
+  document.getElementById('tab'+(k==='ops'?'Ops':'Proj')).classList.toggle('on',k===v);
+ });
+ if(v==='proj') setTimeout(drawProj,30);
+}
+
+const MO=['April','May','June','July','August','September','October','November','December','January','February','March'];
+const MOS=['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
+const fyYm=(i,base)=>[base+(i<9?0:1), i<9? i+4 : i-8];
+const dim=(y,m)=>new Date(y,m,0).getDate();
+// FY start years, e.g. 'FY 2026-27' -> 2026
+const fyBase=k=>{const m=(k||'').match(/(\d{4})/);return m? +m[1]:2026;};
+const Y27=fyBase(fyKeys[0]), Y26=fyBase(fyKeys[1]);
+const d27=MO.map((_,i)=>dim(...fyYm(i,Y27))), d26=MO.map((_,i)=>dim(...fyYm(i,Y26)));
+
+// current month index + banked daily series
+const pjKeys=Object.keys(D.daily).sort();
+const pjKey=pjKeys[pjKeys.length-1];
+const curIdx=(()=>{const m=+pjKey.split('-')[1];return m>=4? m-4 : m+8;})();
+const dayRows=(D.daily[pjKey]||[]).filter(r=>r.revTot>0);
+const banked=dayRows.reduce((a,r)=>a+r.revTot,0);
+const bankedDays=dayRows.length;
+
+// seasonal index: FY25-26 per-day, normalised to that FY's same-month-as-current
+const pd26=MO.map((_,i)=>(prev.months[i]? prev.months[i].revTot:0)/d26[i]);
+const seasIdx=pd26.map(v=>pd26[curIdx]? v/pd26[curIdx]:1);
+
+// run-rate windows
+const RRW=[{k:'7',lbl:'Last 7 days'},{k:'14',lbl:'Last 14 days'},
+           {k:'mtd',lbl:'Full month-to-date'},{k:'q',lbl:'Last 3 months'}];
+let rrKey='mtd';
+function runRate(){
+ if(rrKey==='q'){
+  let rev=0,dys=0;
+  for(let i=Math.max(0,curIdx-2);i<curIdx;i++){if(cur.months[i]){rev+=cur.months[i].revTot;dys+=d27[i];}}
+  rev+=banked;dys+=bankedDays;
+  return dys? rev/dys : 0;
+ }
+ if(rrKey==='mtd') return bankedDays? banked/bankedDays : 0;
+ const n=+rrKey, sl=dayRows.slice(-n);
+ return sl.length? sl.reduce((a,r)=>a+r.revTot,0)/sl.length : 0;
+}
+
+const aop=D.aop, aopRev=aop? aop.months.map(m=>m.rev):null;
+
+function build(){
+ const rr=runRate(), ramp=+document.getElementById('rampS').value/100,
+       seas=document.getElementById('seasS').checked;
+ const rows=MO.map((mn,i)=>{
+  let rev,basis;
+  if(i<curIdx){ rev=cur.months[i]? cur.months[i].revTot:0; basis='Actual'; }
+  else if(i===curIdx){ rev=banked+(d27[i]-bankedDays)*rr;
+    basis=bankedDays+' d actual + '+(d27[i]-bankedDays)+' d at run-rate'; }
+  else { const st=i-curIdx;
+    rev=rr*(seas? seasIdx[i]:1)*d27[i]*Math.pow(1+ramp,st);
+    basis='Run-rate'+(seas?' × seasonality':'')+(ramp?' × ramp^'+st:''); }
+  return {i:i,mn:mn,ms:MOS[i],days:d27[i],idx:seasIdx[i],rev:rev,basis:basis,
+          a26:prev.months[i]? prev.months[i].revTot:0,
+          plan:aopRev? aopRev[i]:null, closed:i<curIdx, isCur:i===curIdx};
+ });
+ return {rows:rows,rr:rr,ramp:ramp,seas:seas,
+   tot:rows.reduce((a,r)=>a+r.rev,0),
+   t26:rows.reduce((a,r)=>a+r.a26,0),
+   plan:aopRev? aopRev.reduce((a,b)=>a+b,0):null};
+}
+function fyTotalFor(rampPct){
+ const rr=runRate(), seas=document.getElementById('seasS').checked, ramp=rampPct/100;
+ let t=0;
+ for(let i=0;i<12;i++){
+  if(i<curIdx) t+=cur.months[i]? cur.months[i].revTot:0;
+  else if(i===curIdx) t+=banked+(d27[i]-bankedDays)*rr;
+  else t+=rr*(seas? seasIdx[i]:1)*d27[i]*Math.pow(1+ramp,i-curIdx);
+ }
+ return t;
+}
+
+let pCharts={};
+function drawProj(){
+ const M=build(), rows=M.rows;
+ document.getElementById('rrVal').textContent='₹'+(M.rr/CR).toFixed(3)+' Cr/day';
+ document.getElementById('rampVal').textContent=(M.ramp>=0?'+':'')+(M.ramp*100).toFixed(2)+'% / month';
+ const dv=(v)=>(v>=0?'+₹':'−₹')+Math.abs(v/CR).toFixed(1);
+ const cardsHtml=[
+  ['FY 26-27 projection',fmtCr(M.tot),'vs FY 25-26 ₹'+(M.t26/CR).toFixed(1)+' Cr',M.tot>=M.t26],
+  ['YoY growth',((M.tot/M.t26-1)*100).toFixed(1)+'%','on '+fyKeys[1],M.tot>=M.t26],
+  M.plan? ['vs AOP plan',dv(M.tot-M.plan)+' Cr','plan ₹'+(M.plan/CR).toFixed(1)+' Cr (IP+OP)',M.tot>=M.plan]
+        : ['AOP plan','n/a','plan file not found',true],
+  ['Banked so far',fmtCr(rows.filter(r=>r.closed).reduce((a,r)=>a+r.rev,0)+banked),
+    rows.filter(r=>r.closed).length+' closed months + '+bankedDays+' d of '+MOS[curIdx],true],
+  ['H2 implied (Oct–Mar)',fmtCr(rows.slice(6).reduce((a,r)=>a+r.rev,0)),
+    'vs ₹'+(rows.slice(6).reduce((a,r)=>a+r.a26,0)/CR).toFixed(1)+' Cr LY',true]
+ ];
+ document.getElementById('pcards').innerHTML=cardsHtml.map((c,n)=>
+  '<div class="card'+(n===0?'':' m')+'"><div class="lbl">'+c[0]+'</div><div class="val">'+c[1]+
+  '</div><div class="delta '+(c[3]?'up':'dn')+'">'+c[2]+'</div></div>').join('');
+
+ document.getElementById('pchartnote').innerHTML='₹ Cr per month. Solid blue = closed actuals, hatched = projected. '+
+  (aop? 'Maroon line = AOP plan (IP + OP). ':'')+'Gray = FY 25-26 actual.';
+
+ const proj=rows.map(r=>r.closed? null : r.rev/CR);
+ const act=rows.map(r=>r.closed? r.rev/CR : null);
+ if(pCharts.p) pCharts.p.destroy();
+ pCharts.p=new Chart(document.getElementById('projChart'),{data:{labels:MOS,datasets:[
+  {type:'bar',label:'FY 25-26 actual',data:rows.map(r=>r.a26/CR),backgroundColor:'rgba(127,140,155,.45)',borderRadius:3,order:4},
+  {type:'bar',label:'FY 26-27 actual',data:act,backgroundColor:BLUE,borderRadius:3,order:3},
+  {type:'bar',label:'FY 26-27 projected',data:proj,backgroundColor:LT,borderColor:BLUE,borderWidth:1.4,borderRadius:3,order:3}
+ ].concat(aop? [{type:'line',label:'AOP plan',data:aopRev.map(v=>v/CR),borderColor:MAROON,borderWidth:2,
+   pointRadius:3,pointBackgroundColor:MAROON,tension:.25,order:1}]:[])},
+  options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}},
+   tooltip:{callbacks:{label:c=>c.dataset.label+': ₹'+(+c.raw).toFixed(2)+' Cr'}}},
+   scales:{y:{title:{display:true,text:'₹ Cr'},beginAtZero:true},x:{stacked:false}}}});
+
+ // cumulative
+ let ca=0,cp=0; const cumP=[],cumPlan=[];
+ rows.forEach(r=>{ca+=r.rev;cumP.push(ca/CR);if(aop){cp+=r.plan;cumPlan.push(cp/CR);}});
+ if(pCharts.c) pCharts.c.destroy();
+ pCharts.c=new Chart(document.getElementById('cumChart'),{type:'line',data:{labels:MOS,datasets:[
+  {label:'Projection cumulative',data:cumP,borderColor:BLUE,backgroundColor:'rgba(43,124,190,.14)',fill:aop?'+1':'origin',borderWidth:2,pointRadius:2.5,tension:.2}
+ ].concat(aop? [{label:'AOP plan cumulative',data:cumPlan,borderColor:MAROON,borderWidth:2,borderDash:[6,4],pointRadius:2.5,tension:.2,fill:false}]:[])},
+  options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}},
+   tooltip:{callbacks:{label:c=>c.dataset.label+': ₹'+(+c.raw).toFixed(1)+' Cr'}}},
+   scales:{y:{title:{display:true,text:'₹ Cr cumulative'}}}}});
+
+ // scenario fan
+ const fanX=[];for(let p=-2;p<=5;p+=0.5)fanX.push(p);
+ const fanY=fanX.map(p=>fyTotalFor(p)/CR);
+ const here=fanX.map(p=>Math.abs(p-M.ramp*100)<0.26? fyTotalFor(p)/CR : null);
+ if(pCharts.f) pCharts.f.destroy();
+ pCharts.f=new Chart(document.getElementById('fanChart'),{data:{labels:fanX.map(p=>(p>=0?'+':'')+p+'%'),datasets:[
+  {type:'line',label:'FY total',data:fanY,borderColor:BLUE,borderWidth:2,pointRadius:2,tension:.2,fill:false},
+  {type:'line',label:'Current setting',data:here,borderColor:MAROON,pointRadius:6,pointBackgroundColor:MAROON,showLine:false}
+ ].concat(aop? [{type:'line',label:'AOP plan',data:fanX.map(()=>M.plan/CR),borderColor:GRAY,borderWidth:1.4,borderDash:[5,4],pointRadius:0}]:[])},
+  options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}},
+   tooltip:{callbacks:{label:c=>c.dataset.label+': ₹'+(+c.raw).toFixed(1)+' Cr'}}},
+   scales:{y:{title:{display:true,text:'₹ Cr FY total'}},x:{title:{display:true,text:'monthly ramp'}}}}});
+
+ // table
+ document.getElementById('ptabnote').innerHTML='Seasonality index = each FY 25-26 month\'s ₹/day relative to '+MOS[curIdx]+
+  ' FY 25-26. Shaded rows are closed actuals.'+(aop? ' AOP plan is the IP + OP line from '+aop.source+'.':'');
+ const vtag=(v)=>v==null? '—' : '<span class="tag '+(v>=0?'g':'r')+'">'+(v>=0?'+':'')+(v/CR).toFixed(2)+'</span>';
+ document.querySelector('#projTable tbody').innerHTML=rows.map(r=>
+  '<tr class="'+(r.closed?'pastm':'')+'"><td>'+r.mn+(r.isCur?' <span class="tag y">current</span>':'')+'</td>'+
+  '<td class="r">'+r.days+'</td><td class="r">'+r.idx.toFixed(3)+'</td>'+
+  '<td class="r">'+(r.a26/CR).toFixed(2)+'</td>'+
+  '<td class="r">'+(r.plan!=null?(r.plan/CR).toFixed(2):'—')+'</td>'+
+  '<td class="r"><b>'+(r.rev/CR).toFixed(2)+'</b></td>'+
+  '<td class="r">'+(r.rev/r.days/CR).toFixed(3)+'</td>'+
+  '<td class="r">'+vtag(r.plan!=null? r.rev-r.plan:null)+'</td>'+
+  '<td class="r">'+vtag(r.rev-r.a26)+'</td><td style="font-size:11px;color:#7F8C9B">'+r.basis+'</td></tr>').join('')+
+  '<tr class="fytot"><td>FY 26-27 total</td><td class="r">'+d27.reduce((a,b)=>a+b,0)+'</td><td class="r"></td>'+
+  '<td class="r">'+(M.t26/CR).toFixed(1)+'</td><td class="r">'+(M.plan!=null?(M.plan/CR).toFixed(1):'—')+'</td>'+
+  '<td class="r">'+(M.tot/CR).toFixed(1)+'</td><td class="r"></td>'+
+  '<td class="r">'+vtag(M.plan!=null? M.tot-M.plan:null)+'</td><td class="r">'+vtag(M.tot-M.t26)+'</td><td></td></tr>';
+
+ // commentary
+ const fut=rows.filter(r=>!r.closed&&!r.isCur);
+ const wk=fut.slice().sort((a,b)=>(a.rev-a.plan)-(b.rev-b.plan))[0];
+ const bst=fut.slice().sort((a,b)=>(b.rev-b.plan)-(a.rev-a.plan))[0];
+ const need=M.plan!=null? (M.plan-rows.filter(r=>r.closed||r.isCur).reduce((a,r)=>a+r.rev,0))/
+   fut.reduce((a,r)=>a+r.days,0):null;
+ document.getElementById('pcomment').innerHTML=
+  'At a <b>₹'+(M.rr/CR).toFixed(3)+' Cr/day</b> run-rate ('+RRW.find(w=>w.k===rrKey).lbl.toLowerCase()+')'+
+  (M.seas?', FY 25-26 seasonality applied':', flat across months')+
+  ' and a <b>'+(M.ramp>=0?'+':'')+(M.ramp*100).toFixed(2)+'%</b> monthly ramp, FY 26-27 lands at <b>'+fmtCr(M.tot)+
+  '</b> — '+(M.tot>=M.t26?'up':'down')+' '+Math.abs((M.tot/M.t26-1)*100).toFixed(1)+'% on FY 25-26'+
+  (M.plan!=null? ' and ₹'+Math.abs((M.tot-M.plan)/CR).toFixed(1)+' Cr '+(M.tot>=M.plan?'above':'below')+' the AOP plan':'')+'. '+
+  (need!=null? 'To land exactly on plan, the remaining '+fut.reduce((a,r)=>a+r.days,0)+' days after '+MOS[curIdx]+
+   ' would need to average <b>₹'+(need/CR).toFixed(3)+' Cr/day</b> ('+
+   ((need/M.rr-1)*100>=0?'+':'')+((need/M.rr-1)*100).toFixed(0)+'% vs the current run-rate). ':'')+
+  (aop? 'The tightest month against plan is <b>'+wk.mn+'</b> (₹'+((wk.rev-wk.plan)/CR).toFixed(2)+
+   ' Cr) and the loosest <b>'+bst.mn+'</b> (₹'+((bst.rev-bst.plan)/CR).toFixed(2)+' Cr). ':'')+
+  '<span style="color:#7F8C9B">Caveat: this is a top-down run-rate extrapolation. It holds realization, payer mix and case mix at current levels, and '+
+  (M.seas?'borrows its monthly shape from last year — so any tariff revision, bed addition or Onam/festival shift moves it independently of days.':
+   'applies no seasonality, so it will overstate the Nov trough and understate the Jan–Feb peak.')+'</span>';
+}
+
+(function initProj(){
+ document.getElementById('rrBtns').innerHTML=RRW.map(w=>
+  '<button class="rbtn'+(w.k===rrKey?' on':'')+'" data-w="'+w.k+'">'+w.lbl+'</button>').join('');
+ document.querySelectorAll('#rrBtns .rbtn').forEach(b=>b.onclick=()=>{
+  rrKey=b.dataset.w;
+  document.querySelectorAll('#rrBtns .rbtn').forEach(x=>x.classList.toggle('on',x===b));
+  drawProj();});
+ document.getElementById('rampS').oninput=drawProj;
+ document.getElementById('seasS').onchange=drawProj;
+})();
 </script></body></html>
 """
 
