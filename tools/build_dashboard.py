@@ -1606,9 +1606,10 @@ function drawProj(){
   if(!el||!M.TD)return;
   const d=document.createElement('div');
   d.className='card m';
+  const tp=M.rows.slice().sort((a,b)=>b.cmi-a.cmi)[0];
   d.innerHTML='<div class="lbl">Case Mix — ₹/case</div><div class="val">₹'+(M.avgC/L).toFixed(2)+' L</div>'+
-   '<div class="delta '+((M.momAvg==null||M.momAvg>=0)?'up':'dn')+'">ALOS '+(M.TB/M.TD).toFixed(2)+' d · '+
-   (M.momAvg!=null?((M.momAvg>=0?'▲ +':'▼ ')+(M.momAvg*100).toFixed(1)+'% MoM'):'no prior month')+
+   '<div class="delta '+((M.momAvg==null||M.momAvg>=0)?'up':'dn')+'">'+
+   (tp? 'Top: '+tc(tp.dept)+' CMI '+tp.cmi.toFixed(2)+' · '+tp.dis+' cases':'ALOS '+(M.TB/M.TD).toFixed(2)+' d')+
    ' · <a href="#" onclick="showView(\'cmi\');return false;" style="color:#2B7CBE">detail</a></div>';
   el.appendChild(d);
  })();
