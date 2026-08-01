@@ -1426,12 +1426,43 @@ function drawProj(){
   return out;
  }
 
+ // ---- fixed relative weights, pooled over every history month (the base period).
+ // Weights are frozen, so the hospital CMI moves on case-mix shift, not on price.
+ function baseAgg(){
+  const out={};
+  Object.keys(D.history).forEach(mk=>{
+   Object.values(deptAgg(mk)).forEach(d=>{
+    const o=out[d.dept]=out[d.dept]||{dept:d.dept,iprev:0,dis:0,bd:0};
+    o.iprev+=d.iprev; o.dis+=d.dis; o.bd+=d.bd;});});
+  return out;
+ }
+ function weightSet(noDay){
+  const B=baseAgg(), inB=d=>!noDay||(d.dis? d.bd/d.dis:0)>=2;
+  const adm=Object.values(B).filter(d=>d.dis>=MINDIS_DEPT);
+  const base=adm.filter(inB);
+  const TI=base.reduce((a,d)=>a+d.iprev,0), TD=base.reduce((a,d)=>a+d.dis,0);
+  const avg=TD? TI/TD:0, w={};
+  adm.forEach(d=>{w[d.dept]=avg? (d.iprev/d.dis)/avg : 0;});
+  return {w:w,avg:avg,cases:TD,nDept:base.length,months:Object.keys(D.history).sort()};
+ }
+ // CMI = Σ(case weight) ÷ number of cases
+ function cmiOf(agg,W,inBase){
+  let sw=0,n=0;
+  Object.values(agg).forEach(d=>{
+   const wt=W.w[d.dept];
+   if(wt==null||d.dis<MINDIS_DEPT||!inBase(d))return;
+   sw+=wt*d.dis; n+=d.dis;});
+  return {cmi:n? sw/n:0,sw:sw,n:n};
+ }
+
  function model(){
   const A=deptAgg(curM), P=prevM? deptAgg(prevM):{};
   const adm=Object.values(A).filter(d=>d.dis>=MINDIS_DEPT);
   const exc=Object.values(A).filter(d=>d.dis<MINDIS_DEPT);
   const noDay=document.getElementById('cmiNoDay').checked;
   const inBase=d=>!noDay || (d.dis? d.bd/d.dis:0)>=2;
+  const W=weightSet(noDay);
+  const HC=cmiOf(A,W,inBase), HCp=prevM? cmiOf(P,W,inBase):null;
   const base=adm.filter(inBase);
   const TI=base.reduce((a,d)=>a+d.iprev,0), TD=base.reduce((a,d)=>a+d.dis,0),
         TB=base.reduce((a,d)=>a+d.bd,0);
@@ -1442,18 +1473,26 @@ function drawProj(){
    const al=d.dis? d.bd/d.dis:0;
    const rpc=d.iprev/d.dis, rpb=(d.bd&&al>=1)? d.iprev/d.bd:0, p=P[d.dept];
    return {dept:d.dept,iprev:d.iprev,dis:d.dis,docs:d.docs,inBase:inBase(d),
-     alos:al,rpc:rpc,cmi:avgC? rpc/avgC:0,
+     alos:al,rpc:rpc,cmi:(W.w[d.dept]!=null? W.w[d.dept]:0),cmiCur:avgC? rpc/avgC:0,
      rpb:rpb,ii:(avgB&&rpb)? rpb/avgB:0,
      shRev:TI? d.iprev/TI:0,shDis:TD? d.dis/TD:0,
      mom:(p&&p.dis>=MINDIS_DEPT)? rpc-(p.iprev/p.dis) : null};
   }).sort((a,b)=>b.iprev-a.iprev);
   const docs=[];
   const H=(D.history[curM]||{}).doctors||{};
+  // doctor weights pooled over the same base period
+  const DB={};
+  Object.keys(D.history).forEach(mk=>{
+   const H2=(D.history[mk]||{}).doctors||{};
+   Object.keys(H2).forEach(dn=>{const r=H2[dn];
+    if(BAD.test((r.dept||'').trim()))return;
+    const o=DB[dn]=DB[dn]||{ip:0,dis:0}; o.ip+=docIp(dn,r); o.dis+=r.dis;});});
+  const docW=dn=>{const b=DB[dn]; return (b&&b.dis&&W.avg)? (b.ip/b.dis)/W.avg : 0;};
   Object.keys(H).forEach(dn=>{
    const r=H[dn]; if(BAD.test((r.dept||'').trim())||r.dis<minDoc) return;
    const ipr=docIp(dn,r), al=alosOf(dn), bd=(al>=1)? al*r.dis : 0;
    docs.push({doc:dn,dept:r.dept,iprev:ipr,dis:r.dis,alos:al,
-     rpc:ipr/r.dis,cmi:avgC?(ipr/r.dis)/avgC:0,
+     rpc:ipr/r.dis,cmi:docW(dn),
      rpb:bd? ipr/bd:0,ii:(avgB&&bd)?(ipr/bd)/avgB:0,cash:cashOf(dn)});
   });
   docs.sort((a,b)=>b.cmi-a.cmi);
@@ -1462,6 +1501,7 @@ function drawProj(){
     TI:TI,TD:TD,TB:TB,avgC:avgC,avgB:avgB,noDay:noDay,
     nBase:base.length,nAdm:adm.length,
     momAvg:(pTD&&pTI)? avgC/(pTI/pTD)-1 : null,
+    W:W,cmiHosp:HC.cmi,cmiSw:HC.sw,cmiN:HC.n,cmiPrev:HCp? HCp.cmi:null,
     grossRev:mtd.revTot||0};
  }
 
@@ -1469,16 +1509,27 @@ function drawProj(){
  function render(){
   const M=model(), rows=M.rows;
   document.getElementById('cmiMethod').innerHTML=
-   'No DRG or relative-weight field exists in the flash or the Daily MIS, so this is an <b>billed-intensity proxy</b>, not a coded CMI. '+
-   'For each doctor, IP-attributed revenue = IP service revenue + pharmacy apportioned by that doctor\'s IP share of service revenue. '+
-   'Rolled to specialty, divided by discharges, then indexed to the hospital average across <b>admitting specialties only</b> '+
-   '(≥'+MINDIS_DEPT+' discharges in the month). Month: <b>'+mName(curM)+'</b>, '+D.history[curM].daysElapsed+' days elapsed. '+
+   '<b>CMI = Σ(case weight) ÷ number of cases</b>, the standard construction. What differs from a coded CMI is the source of the weights: '+
+   'no DRG or relative-weight field exists in the flash or the Daily MIS, so each case carries its <b>specialty\'s relative weight</b> '+
+   'in place of a DRG weight. Weights are set once over the base period ('+M.W.months.map(mName).join(' + ')+', '+
+   M.W.cases.toLocaleString('en-IN')+' cases, hospital average ₹'+(M.W.avg/L).toFixed(2)+' L/case = weight 1.00) and then held fixed, '+
+   'so the monthly CMI moves when the mix of cases shifts, not when prices or billing move. '+
+   'For each doctor, IP-attributed revenue = IP service revenue + pharmacy apportioned by that doctor\'s IP share of service revenue; '+
+   'rolled to specialty and divided by discharges to give that specialty\'s ₹/case. Only <b>admitting specialties</b> '+
+   '(≥'+MINDIS_DEPT+' discharges) are weighted and counted. Month: <b>'+mName(curM)+'</b>, '+D.history[curM].daysElapsed+' days elapsed. '+
+   'Because the weights are billed-intensity rather than coded acuity, read this as a <b>resource-intensity index</b>: it answers '+
+   '"is this month\'s case mix tilted toward the heavier specialties?", not "how sick were these patients?". '+
    'ALOS is the discharge-level average from the flash <i>Dis</i> sheets, so it covers only dates with a flash file on hand; ₹/bed-day is suppressed where ALOS is under 1 day. '+
    '<b>The MoM column and the MoM card apply this month\'s IP/OP mix ratios and ALOS to last month\'s revenue and discharges</b>, because the flash detail sheets only cover the current month — so treat the MoM figures as directional on volume and case value, not on mix shift.';
 
   document.getElementById('cmiBaseN').textContent=M.TD+' cases · '+M.nBase+' of '+M.nAdm+' specialties';
   const top=rows.slice().sort((a,b)=>b.cmi-a.cmi)[0], bot=rows.slice().sort((a,b)=>a.cmi-b.cmi)[0];
+  const dCmi=(M.cmiPrev!=null&&M.cmiPrev)? M.cmiHosp-M.cmiPrev:null;
   const cards=[
+   ['Hospital CMI ('+mName(curM)+')',M.cmiHosp.toFixed(3),
+     'Σw '+M.cmiSw.toFixed(0)+' ÷ '+M.cmiN.toLocaleString('en-IN')+' cases'+
+     (dCmi!=null? ' · '+(dCmi>=0?'▲ +':'▼ ')+dCmi.toFixed(3)+' vs '+mName(prevM):''),
+     dCmi==null||dCmi>=0],
    ['Hospital ₹ / case','₹'+(M.avgC/L).toFixed(2)+' L',M.momAvg!=null?
      ((M.momAvg>=0?'▲ +':'▼ ')+(M.momAvg*100).toFixed(1)+'% vs '+mName(prevM)):'no prior month',M.momAvg==null||M.momAvg>=0],
    ['Blended ALOS',(M.TB/M.TD).toFixed(2)+' d','MoM sheet ALOS '+((D.momFY[curM]&&D.momFY[curM].alos)?D.momFY[curM].alos.toFixed(2):'—')+' d',true],
@@ -1500,7 +1551,7 @@ function drawProj(){
     backgroundColor:cs.map(r=>r.cmi>=1?BLUE:MAROON),borderRadius:3}]},
    options:{indexAxis:'y',plugins:{legend:{display:false},
     tooltip:{callbacks:{label:c=>'CMI '+(+c.raw).toFixed(2)+' · ₹'+(cs[c.dataIndex].rpc/L).toFixed(2)+' L/case · '+cs[c.dataIndex].dis+' cases'}}},
-    scales:{x:{title:{display:true,text:'Case Mix Index (1.00 = hospital average)'},
+    scales:{x:{title:{display:true,text:'Relative weight (1.00 = base-period hospital average)'},
       grid:{color:ctx=>Math.abs(ctx.tick.value-1)<0.001?'#243342':'rgba(0,0,0,.06)'}},
      y:{ticks:{font:{size:10}}}}}});
 
@@ -1520,8 +1571,11 @@ function drawProj(){
     layout:{padding:24}}});
 
   // dept table
-  document.getElementById('cmiTabNote').innerHTML='Hospital average this month is <b>₹'+(M.avgC/L).toFixed(2)+
-   ' L per case</b> over '+M.TD+' discharges. Intensity index does the same on a per-bed-day basis, so it rewards short-stay throughput where CMI does not. Click a header to sort.';
+  document.getElementById('cmiTabNote').innerHTML='The <b>CMI</b> column is the specialty\'s fixed relative weight from the base period — '+
+   'multiply it by that specialty\'s cases, sum across the table and divide by '+M.cmiN.toLocaleString('en-IN')+' cases to get this month\'s hospital CMI of <b>'+
+   M.cmiHosp.toFixed(3)+'</b>. <b>₹/case</b> is the current month\'s actual, so a specialty billing above its own weight is running hotter than its base period. '+
+   'Hospital average this month is <b>₹'+(M.avgC/L).toFixed(2)+' L per case</b> over '+M.TD+' discharges. '+
+   'Intensity index does the same on a per-bed-day basis, so it rewards short-stay throughput where CMI does not. Click a header to sort.';
   const srt=rows.slice().sort((a,b)=>{const x=a[sortK],y=b[sortK];
    if(typeof x==='string')return sortA? x.localeCompare(y):y.localeCompare(x);
    return sortA? (x||0)-(y||0):(y||0)-(x||0);});
@@ -1607,9 +1661,11 @@ function drawProj(){
   const d=document.createElement('div');
   d.className='card m';
   const tp=M.rows.slice().sort((a,b)=>b.cmi-a.cmi)[0];
-  d.innerHTML='<div class="lbl">Case Mix — ₹/case</div><div class="val">₹'+(M.avgC/L).toFixed(2)+' L</div>'+
-   '<div class="delta '+((M.momAvg==null||M.momAvg>=0)?'up':'dn')+'">'+
-   (tp? 'Top: '+tc(tp.dept)+' CMI '+tp.cmi.toFixed(2)+' · '+tp.dis+' cases':'ALOS '+(M.TB/M.TD).toFixed(2)+' d')+
+  const dc=(M.cmiPrev!=null&&M.cmiPrev)? M.cmiHosp-M.cmiPrev:null;
+  d.innerHTML='<div class="lbl">Case Mix Index</div><div class="val">'+M.cmiHosp.toFixed(3)+'</div>'+
+   '<div class="delta '+((dc==null||dc>=0)?'up':'dn')+'">₹'+(M.avgC/L).toFixed(2)+' L/case · '+
+   (dc!=null? ((dc>=0?'▲ +':'▼ ')+dc.toFixed(3)+' vs '+mName(prevM)):'base month')+
+   (tp? ' · top '+tc(tp.dept)+' '+tp.cmi.toFixed(2):'')+
    ' · <a href="#" onclick="showView(\'cmi\');return false;" style="color:#2B7CBE">detail</a></div>';
   el.appendChild(d);
  })();
