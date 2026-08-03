@@ -14,7 +14,7 @@ months survive even if the source files are removed.
 
 Usage:  python3 build_dashboard.py [folder]
 """
-import sys, os, re, json, glob, datetime
+import sys, os, re, json, glob, datetime, time
 import openpyxl
 
 FY_MONTHS = ["APRIL","MAY","JUNE","JULY","AUGUST","SEPTEMBER","OCTOBER",
@@ -303,7 +303,7 @@ def main():
 
     # ---- flash files ----
     by_date = {}
-    for f in glob.glob(os.path.join(folder, "Daily Revenue Flash_New_*.xlsx")):
+    for f in glob.glob(os.path.join(folder, "**", "Daily Revenue Flash_New_*.xlsx"), recursive=True):
         d = file_date(f)
         if d and (d not in by_date or os.path.getmtime(f) > os.path.getmtime(by_date[d])):
             by_date[d] = f
@@ -411,7 +411,7 @@ def main():
 
     # ---- Daily MIS files: doctor x month granularity ----
     mis_by_date = {}
-    for f in glob.glob(os.path.join(folder, "Daily MIS*.xlsx")):
+    for f in glob.glob(os.path.join(folder, "**", "Daily MIS*.xlsx"), recursive=True):
         d = file_date(f)
         if d and (d not in mis_by_date or os.path.getmtime(f) > os.path.getmtime(mis_by_date[d])):
             mis_by_date[d] = f
@@ -419,8 +419,25 @@ def main():
     for d in sorted(mis_by_date): mis_month_files[f"{d.year}-{d.month:02d}"] = (d, mis_by_date[d])
 
     mom_fy = {}
-    for mkey, (d, f) in sorted(mis_month_files.items()):
-        print("Parsing Daily MIS", os.path.basename(f))
+    mis_cache_path = os.path.join(tools, "mis_cache.json")
+    mis_cache = {}
+    if os.path.exists(mis_cache_path):
+        try: mis_cache = json.load(open(mis_cache_path))
+        except Exception: mis_cache = {}
+    mis_budget = float(os.environ.get("MIS_BUDGET", "0")) or None
+    _t_mis = time.time()
+    mis_deferred = 0
+    for mkey, (d, f) in sorted(mis_month_files.items(), reverse=True):
+        sig = "%s|%d" % (os.path.basename(f), int(os.path.getmtime(f)))
+        cached = mis_cache.get(mkey)
+        if cached and cached.get("src") == sig and history.get(mkey, {}).get("doctors"):
+            mom_fy.update(cached.get("mom") or {})
+            continue
+        if mis_budget and (time.time() - _t_mis) > mis_budget:
+            mis_deferred += 1
+            if cached: mom_fy.update(cached.get("mom") or {})
+            continue
+        print("Parsing Daily MIS", os.path.basename(f), flush=True)
         w = openpyxl.load_workbook(f, read_only=True, data_only=True)
         sheets = {norm(s): s for s in w.sheetnames}
         def get(name): return w[sheets[norm(name)]] if norm(name) in sheets else None
@@ -437,15 +454,18 @@ def main():
                 if dept: rec["dept"] = dept
                 rec[field] += val
         ws = get("MoM FY 26-27") or get("MoM FY 27-28")
-        if ws is not None: mom_fy.update(parse_mom_fy(ws))
+        this_mom = parse_mom_fy(ws) if ws is not None else {}
+        mom_fy.update(this_mom)
         w.close()
+        mis_cache[mkey] = {"src": sig, "mom": this_mom}
         history[mkey] = {"asOf": d.strftime("%Y-%m-%d"),
                          "daysElapsed": d.day,
                          "doctors": {k: v for k, v in docs.items() if any(v[f] for f in ("rev","opv","adm","dis"))},
                          "docDaily": {k: {str(day): round(v, 0) for day, v in dd.items()}
                                       for k, dd in doc_daily.items() if dd}}
     json.dump(history, open(hist_path, "w"))
-    print("History months:", sorted(history))
+    json.dump(mis_cache, open(mis_cache_path, "w"))
+    print("History months:", sorted(history), "| MIS deferred:", mis_deferred, flush=True)
 
     # discharge aggregates per doctor + overall
     dis_by_doc, status_mix, payer_mix = {}, {}, {}
