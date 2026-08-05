@@ -251,7 +251,13 @@ AOP_MONTHS = ["April", "May", "June", "July", "August", "September",
               "October", "November", "December", "January", "February", "March"]
 
 def find_aop(folder):
-    """Walk up from the MIS folder looking for the AOP workbook."""
+    """Walk up from the MIS folder looking for the AOP workbook.
+    AOP_PATH env var short-circuits the walk: set it to an explicit path, or to
+    an empty string to skip the search entirely (cached aop_fy27.json is used).
+    Needed when the folder is a mount whose parents are huge/unrelated."""
+    env = os.environ.get("AOP_PATH")
+    if env is not None:
+        return env if (env and os.path.exists(env)) else None
     d = os.path.abspath(folder)
     for _ in range(5):
         cand = os.path.join(d, AOP_GLOB)
