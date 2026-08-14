@@ -259,11 +259,15 @@ def find_aop(folder):
     if env is not None:
         return env if (env and os.path.exists(env)) else None
     d = os.path.abspath(folder)
-    for _ in range(5):
+    for depth in range(5):
         cand = os.path.join(d, AOP_GLOB)
         if os.path.exists(cand): return cand
-        hits = glob.glob(os.path.join(d, "**", "AOP_vMay26_v2.xlsx"), recursive=True)
-        if hits: return hits[0]
+        # Recursive glob only inside the MIS folder itself: on sandbox/VM mounts the
+        # parents can be enormous (or the whole filesystem) and a recursive walk
+        # there takes minutes. Parents get the direct AOP_GLOB check above only.
+        if depth == 0:
+            hits = glob.glob(os.path.join(d, "**", "AOP_vMay26_v2.xlsx"), recursive=True)
+            if hits: return hits[0]
         d = os.path.dirname(d)
     return None
 
