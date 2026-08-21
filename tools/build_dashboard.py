@@ -506,6 +506,19 @@ def main():
         except Exception: aop = None
     if not aop: print("WARNING: no FY27 AOP available; projection tab will hide plan columns")
 
+    # ---- FY27 monthly financials (BRM deck actuals + MIS pack P&L, both units) ----
+    fy27 = None
+    if os.environ.get("SKIP_FY27") != "1":
+        try:
+            sys.path.insert(0, tools)
+            import parse_fy27
+            fy27 = parse_fy27.collect(folder, tools)
+            if fy27:
+                print("FY27: %d unit P&L, %d monthly blocks" %
+                      (len(fy27.get("units", {})), len(fy27.get("monthly", {}))))
+        except Exception as e:
+            print("FY27 section skipped:", e)
+
     data = dict(
         generated=datetime.datetime.now().strftime("%d %b %Y %H:%M"),
         latestDate=latest_date.strftime("%d %b %Y"),
@@ -520,6 +533,7 @@ def main():
         disDates=sorted({r["date"] for r in discharges}),
         nDischarges=len(discharges),
         aop=aop,
+        fy27=fy27,
     )
     out = os.path.join(folder, "LHRC_Revenue_Dashboard.html")
     open(out, "w", encoding="utf-8").write(TEMPLATE.replace("__DATA__", json.dumps(data)))
@@ -622,6 +636,7 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <button id="tabOps" class="on" onclick="showView('ops')">Daily operations</button>
 <button id="tabProj" onclick="showView('proj')">FY 26-27 projection</button>
 <button id="tabCmi" onclick="showView('cmi')">Case mix (CMI)</button>
+<button id="tabFy27" onclick="showView('fy27')">FY27 financials</button>
 </nav>
 <div class="wrap view on" id="viewOps">
 <div class="cards" id="cards"></div>
@@ -873,6 +888,36 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <div class="panel"><h2>Read-across</h2>
 <div class="note">Auto-generated from the current month's case mix.</div>
 <div id="cmiComment" style="font-size:12.5px;line-height:1.65;color:#33475b"></div></div>
+</div>
+
+<div class="wrap view" id="viewFy27">
+<div class="panel vzn">
+<h2>FY 26-27 monthly financials &mdash; <span id="f27Through"></span></h2>
+<div class="note" id="f27Basis"></div>
+<div id="f27UnitBtns" style="margin:10px 0 4px"></div>
+</div>
+<div class="cards" id="f27Cards"></div>
+<div class="panel"><h2>Profit &amp; loss to EBITDA</h2>
+<div class="note" id="f27PlNote"></div>
+<div class="scroll"><table class="vtab" id="f27Pl"><thead></thead><tbody></tbody></table></div></div>
+<div class="grid">
+<div class="panel"><h2>Monthly revenue &mdash; actual</h2>
+<div class="note">&#8377; Cr. OP / IP split, actuals only (see basis note above).</div>
+<canvas id="f27RevChart"></canvas></div>
+<div class="panel"><h2>OP visits &mdash; new vs revisit</h2>
+<div class="note">Monthly actuals.</div>
+<canvas id="f27OpvChart"></canvas></div>
+</div>
+<div class="grid">
+<div class="panel"><h2>IP discharges &amp; occupancy</h2>
+<div class="note">Group level (Kochi + Calicut). Bars = discharges, line = occupancy %.</div>
+<canvas id="f27OccChart"></canvas></div>
+<div class="panel"><h2>Payor mix</h2>
+<div class="note">&#8377; Cr, group level, monthly actuals.</div>
+<canvas id="f27PayChart"></canvas></div>
+</div>
+<div class="panel vzn"><h2>Not available in the FY27 packs</h2>
+<div class="note" id="f27Gaps"></div></div>
 </div>
 
 <div class="wrap" style="padding-top:0"><footer id="foot"></footer></div>
@@ -1338,14 +1383,16 @@ document.getElementById('foot').innerHTML='<b>Files parsed:</b> '+D.filesParsed.
  (D.aop? '<br><b>FY 26-27 projection tab:</b> AOP plan from '+D.aop.source+' (\'Monthly P&L\'). Plan line = IP + OP revenue, which is what the flash gross figure covers; the plan\'s F&amp;B (₹'+((D.aop.fyPlanTotal-D.aop.fyPlanRev)/CR).toFixed(1)+' Cr incl. other income) is excluded so the comparison is like-for-like. Projection is a run-rate extrapolation, not a bottom-up build — it holds current realization and payer mix flat.':'');
 
 // ============================ FY 26-27 PROJECTION TAB ============================
-const VIEWS={ops:'Ops',proj:'Proj',cmi:'Cmi'};
+const VIEWS={ops:'Ops',proj:'Proj',cmi:'Cmi',fy27:'Fy27'};
 function showView(v){
  Object.keys(VIEWS).forEach(k=>{
-  document.getElementById('view'+VIEWS[k]).classList.toggle('on',k===v);
-  document.getElementById('tab'+VIEWS[k]).classList.toggle('on',k===v);
+  const el=document.getElementById('view'+VIEWS[k]), tb=document.getElementById('tab'+VIEWS[k]);
+  if(el) el.classList.toggle('on',k===v);
+  if(tb) tb.classList.toggle('on',k===v);
  });
  if(v==='proj') setTimeout(drawProj,30);
  if(v==='cmi') setTimeout(window.drawCmi,30);
+ if(v==='fy27') setTimeout(window.drawFy27,30);
 }
 
 const MO=['April','May','June','July','August','September','October','November','December','January','February','March'];
@@ -1801,6 +1848,145 @@ function drawProj(){
    ' · <a href="#" onclick="showView(\'cmi\');return false;" style="color:#2B7CBE">detail</a></div>';
   el.appendChild(d);
  })();
+})();
+
+// ============================ FY27 FINANCIALS TAB ============================
+(function(){
+ const F=D.fy27;
+ const tab=document.getElementById('tabFy27');
+ if(!F){ if(tab) tab.style.display='none'; window.drawFy27=function(){}; return; }
+ const MOS4=F.months||['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
+ const units=Object.keys(F.units||{});
+ let unit=units.includes('Kochi')?'Kochi':(units[0]||null);
+ const charts={};
+ const nn=v=>(typeof v==='number'&&isFinite(v));
+ // last month index that actually carries data, so empty future months are dropped
+ const lastIdx=(()=>{
+  let li=-1;
+  const probe=[(F.monthly['revenue:Kochi']||{}).total,(F.monthly.hospital||{}).ipDisch];
+  probe.forEach(s=>{ if(s&&s.monthly) s.monthly.forEach((v,i)=>{ if(nn(v)&&Math.abs(v)>0) li=Math.max(li,i); }); });
+  return li<0?3:li;
+ })();
+ const labs=MOS4.slice(0,lastIdx+1);
+ const ser=(slot,key)=>{
+  const b=F.monthly[slot]; if(!b||!b[key]) return [];
+  return b[key].monthly.slice(0,lastIdx+1).map(v=>nn(v)?v:null);
+ };
+
+ document.getElementById('f27Through').textContent='through '+labs[labs.length-1]+'-'+
+   String((new Date().getFullYear())%100).padStart(2,'0');
+ document.getElementById('f27Basis').innerHTML=F.basisNote||'';
+ document.getElementById('f27Gaps').innerHTML=
+  'The <b>13Monthly P&amp;L</b> tab in both MIS packs evaluates to zero on every line for every month '+
+  '(verified by recalculation, not a stale formula cache) and its columns are dated Apr-25&ndash;Mar-26, '+
+  'so there is <b>no FY27 monthly EBITDA series</b> &mdash; EBITDA is shown for the report month and YTD only. '+
+  'The <b>14KPI</b> tab has real volume counts but zero for every revenue-derived KPI and realization, '+
+  'so <b>ARPOB and ALOS are not charted here</b>; use the Daily operations tab, which derives them from the '+
+  'Daily MIS <i>MoM FY</i> sheet.';
+
+ // ---- unit toggle ----
+ const btnWrap=document.getElementById('f27UnitBtns');
+ function paintBtns(){
+  btnWrap.innerHTML=units.map(u=>'<button class="mbtn'+(u===unit?' on':'')+'" data-u="'+u+'">'+u+'</button>').join('');
+  btnWrap.querySelectorAll('button').forEach(b=>b.onclick=()=>{unit=b.dataset.u;paintBtns();render();});
+ }
+
+ // ---- KPI cards + P&L table (per unit) ----
+ function render(){
+  const U=F.units[unit]; if(!U) return;
+  const get=k=>U.lines.find(l=>l.key===k)||{};
+  const rev=get('revenue'), eb=get('netEbitda').ytdAct!=null?get('netEbitda'):get('ebitda'), np=get('netProfit');
+  const mar=(a,b)=>(nn(a)&&nn(b)&&b!==0)?(a/b*100):null;
+  const ach=(a,b)=>(nn(a)&&nn(b)&&b!==0)?(a/b*100):null;
+  const card=(lbl,val,sub,cls)=>'<div class="card'+(cls?' '+cls:'')+'"><div class="lbl">'+lbl+
+    '</div><div class="val">'+val+'</div><div class="delta '+(sub&&sub.up?'up':'dn')+'">'+((sub&&sub.t)||'')+'</div></div>';
+  const sgn=v=>v==null?'':(v>=0?'▲ ':'▼ ');
+  const a1=ach(rev.ytdAct,rev.ytdBud);
+  // EBITDA vs budget: a %-of-budget ratio is meaningless (and sign-flips) when the
+  // budget is a loss, so show the absolute variance and colour on act>=bud instead.
+  const ebVar=(nn(eb.ytdAct)&&nn(eb.ytdBud))? eb.ytdAct-eb.ytdBud : null;
+  const ebPos=nn(eb.ytdBud)&&eb.ytdBud>0;
+  const ebHead=ebVar==null? '—'
+    : (ebPos? (eb.ytdAct/eb.ytdBud*100).toFixed(0)+'%'
+            : (ebVar>=0?'+':'')+fmtCr(ebVar).replace('₹','₹'));
+  document.getElementById('f27Cards').innerHTML=
+   card('YTD revenue',fmtCr(rev.ytdAct||0),{t:(a1!=null? a1.toFixed(0)+'% of budget ('+fmtCr(rev.ytdBud||0)+')':''),up:(a1!=null&&a1>=100)})+
+   card('YTD EBITDA',fmtCr(eb.ytdAct||0),{t:(mar(eb.ytdAct,rev.ytdAct)!=null? mar(eb.ytdAct,rev.ytdAct).toFixed(1)+'% margin':''),up:(eb.ytdAct||0)>=0},'m')+
+   card('EBITDA vs budget',ebHead,
+     {t:(nn(eb.ytdBud)? (ebPos? 'budget '+fmtCr(eb.ytdBud)
+                              : (ebVar>=0?'better than':'worse than')+' budget '+fmtCr(eb.ytdBud)):''),
+      up:(ebVar!=null&&ebVar>=0)},'m')+
+   card(U.month+' revenue',fmtCr(rev.monthAct||0),{t:(ach(rev.monthAct,rev.monthBud)!=null? ach(rev.monthAct,rev.monthBud).toFixed(0)+'% of budget':''),up:(ach(rev.monthAct,rev.monthBud)||0)>=100})+
+   card(U.month+' EBITDA',fmtCr(eb.monthAct||0),{t:(mar(eb.monthAct,rev.monthAct)!=null? mar(eb.monthAct,rev.monthAct).toFixed(1)+'% margin':''),up:(eb.monthAct||0)>=0},'m')+
+   card('YTD net profit',fmtCr(np.ytdAct||0),{t:(mar(np.ytdAct,rev.ytdAct)!=null? mar(np.ytdAct,rev.ytdAct).toFixed(1)+'% of revenue':''),up:(np.ytdAct||0)>=0},'m');
+
+  document.getElementById('f27PlNote').innerHTML='&#8377; Cr, '+unit+
+   '. Actual vs budget for '+U.month+' and FY27 year-to-date. Budget is the MIS pack\'s own, which ties to the AOP basis.';
+  const th=document.querySelector('#f27Pl thead'), tb=document.querySelector('#f27Pl tbody');
+  th.innerHTML='<tr><th>Line</th><th class="r">'+U.month+' act</th><th class="r">'+U.month+' bud</th>'+
+    '<th class="r">Var</th><th class="r">YTD act</th><th class="r">YTD bud</th><th class="r">Var</th><th class="r">% rev</th></tr>';
+  const c=v=>nn(v)?(v/CR).toFixed(2):'—';
+  const vcell=(a,b,favGood)=>{
+   if(!nn(a)||!nn(b)) return '<td class="r flat">—</td>';
+   const d=a-b, good=favGood? d>=0 : d<=0;
+   return '<td class="r '+(Math.abs(d)<1e4?'flat':(good?'good':'bad'))+'">'+(d>=0?'+':'')+(d/CR).toFixed(2)+'</td>';
+  };
+  const COST=new Set(['consumables','staff','overheads','badDebts','totalExp','finance','depreciation']);
+  const BOLD=new Set(['revenue','contribution','ebitda','netEbitda','cashProfit','netProfit']);
+  const revYtd=rev.ytdAct;
+  tb.innerHTML=U.lines.map(l=>{
+   const favGood=!COST.has(l.key);
+   const share=(nn(l.ytdAct)&&nn(revYtd)&&revYtd)?(l.ytdAct/revYtd*100).toFixed(1)+'%':'—';
+   return '<tr'+(BOLD.has(l.key)?' class="fytot"':'')+'><td>'+l.label+'</td>'+
+    '<td class="r">'+c(l.monthAct)+'</td><td class="r">'+c(l.monthBud)+'</td>'+vcell(l.monthAct,l.monthBud,favGood)+
+    '<td class="r">'+c(l.ytdAct)+'</td><td class="r">'+c(l.ytdBud)+'</td>'+vcell(l.ytdAct,l.ytdBud,favGood)+
+    '<td class="r">'+share+'</td></tr>';
+  }).join('');
+
+  drawRev(); drawOpv();
+ }
+
+ const mk=(id,cfg)=>{ const el=document.getElementById(id); if(!el) return;
+  if(charts[id]) charts[id].destroy(); charts[id]=new Chart(el,cfg); };
+ const money={ticks:{callback:v=>(v/CR).toFixed(0)}};
+
+ function drawRev(){
+  const slot='revenue:'+unit;
+  mk('f27RevChart',{type:'bar',data:{labels:labs,datasets:[
+    {label:'OP',data:ser(slot,'op'),backgroundColor:BLUE,stack:'s'},
+    {label:'IP',data:ser(slot,'ip'),backgroundColor:MAROON,stack:'s'}]},
+   options:{responsive:true,plugins:{tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmtCr(c.parsed.y||0)}}},
+    scales:{x:{stacked:true},y:{stacked:true,...money,title:{display:true,text:'₹ Cr'}}}}});
+ }
+ function drawOpv(){
+  const slot='opVisits:'+unit;
+  mk('f27OpvChart',{type:'bar',data:{labels:labs,datasets:[
+    {label:'New',data:ser(slot,'new'),backgroundColor:MAROON,stack:'v'},
+    {label:'Revisit',data:ser(slot,'revisit'),backgroundColor:LT,stack:'v'}]},
+   options:{responsive:true,scales:{x:{stacked:true},y:{stacked:true,title:{display:true,text:'visits'}}}}});
+ }
+ function drawGroup(){
+  const h=F.monthly.hospital||{};
+  const occ=(h.occupancy?h.occupancy.monthly.slice(0,lastIdx+1):[]).map(v=>nn(v)?v*100:null);
+  mk('f27OccChart',{data:{labels:labs,datasets:[
+    {type:'bar',label:'IP discharges',data:(h.ipDisch?h.ipDisch.monthly.slice(0,lastIdx+1):[]).map(v=>nn(v)?v:null),backgroundColor:BLUE,yAxisID:'y'},
+    {type:'line',label:'Occupancy %',data:occ,borderColor:MAROON,backgroundColor:MAROON,tension:.3,yAxisID:'y1'}]},
+   options:{responsive:true,scales:{y:{title:{display:true,text:'discharges'}},
+    y1:{position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'occupancy %'},
+     ticks:{callback:v=>v.toFixed(0)+'%'}}}}});
+  const A=F.monthly.payorA||{}, B=F.monthly.payorB||{};
+  const pk=[['cash','Cash',BLUE],['insurance','Insurance',MAROON],['government','Government',GOLD],
+            ['corporate','Corporate',GRAY],['international','International',LT]];
+  mk('f27PayChart',{type:'bar',data:{labels:labs,datasets:pk.map(([k,lbl,col])=>{
+    const src=(A[k]?A:(B[k]?B:null));
+    return {label:lbl,data:src?src[k].monthly.slice(0,lastIdx+1).map(v=>nn(v)?v:null):[],backgroundColor:col,stack:'p'};
+   })},
+   options:{responsive:true,plugins:{tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmtCr(c.parsed.y||0)}}},
+    scales:{x:{stacked:true},y:{stacked:true,...money,title:{display:true,text:'₹ Cr'}}}}});
+ }
+
+ let drawn=false;
+ window.drawFy27=function(){ paintBtns(); render(); if(!drawn){drawGroup();drawn=true;} };
 })();
 </script></body></html>
 """
