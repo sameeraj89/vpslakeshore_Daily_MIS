@@ -916,6 +916,32 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <div class="note">&#8377; Cr, group level, monthly actuals.</div>
 <canvas id="f27PayChart"></canvas></div>
 </div>
+<div id="f27TrackerWrap">
+<div class="panel vzn"><h2>AOP tracker &mdash; <span id="trkSrc"></span></h2>
+<div class="note" id="trkNote"></div>
+<div class="vstrip" id="trkStrip"></div>
+</div>
+
+<div class="panel"><h2>EBITDA &mdash; plan vs actual</h2>
+<div class="note">&#8377; Cr. Bars = actual, line = AOP plan. Marker labels show EBITDA margin on actual revenue.</div>
+<canvas id="trkEbChart"></canvas></div>
+
+<div class="panel vzn"><h2>Two August plan figures</h2>
+<div class="note" id="trkAugNote"></div></div>
+
+<div class="panel"><h2>P&amp;L detail &mdash; plan vs actual</h2>
+<div class="note" id="trkPlNote"></div>
+<div style="margin-bottom:8px">
+ <button class="rbtn on" id="trkSortVar" onclick="trkSort('var')">Sort by variance</button>
+ <button class="rbtn" id="trkSortOrd" onclick="trkSort('ord')">P&amp;L order</button>
+</div>
+<div class="scroll"><table class="vtab" id="trkPl"><thead></thead><tbody></tbody></table></div></div>
+
+<div class="panel"><h2>Initiative build-up</h2>
+<div class="note" id="trkInitNote"></div>
+<div class="scroll" style="max-height:520px;overflow:auto"><table class="vtab" id="trkInit"><thead></thead><tbody></tbody></table></div></div>
+</div>
+
 <div class="panel vzn"><h2>Not available in the FY27 packs</h2>
 <div class="note" id="f27Gaps"></div></div>
 </div>
@@ -1985,8 +2011,144 @@ function drawProj(){
     scales:{x:{stacked:true},y:{stacked:true,...money,title:{display:true,text:'₹ Cr'}}}}});
  }
 
+ // ---------------- AOP tracker panels ----------------
+ const T=F.tracker;
+ let trkMode='var';
+ window.trkSort=function(m){ trkMode=m;
+  document.getElementById('trkSortVar').classList.toggle('on',m==='var');
+  document.getElementById('trkSortOrd').classList.toggle('on',m==='ord');
+  renderTrkPl(); };
+
+ function trkLine(lbl){ return (T.lines||[]).find(l=>l.label===lbl); }
+
+ function renderTracker(){
+  if(!T){ const w=document.getElementById('f27TrackerWrap'); if(w) w.style.display='none'; return; }
+  document.getElementById('trkSrc').textContent=T.source||'';
+  // how many months carry actuals
+  const ch=T.chart||{labels:[],revenue:[],ebitda:[]};
+  const nAct=ch.revenue.filter(x=>nn(x.act)).length;
+  const rev=trkLine('Total Revenue')||{}, eb=trkLine('EBITDA')||{}, pat=trkLine('PAT')||{};
+  const fyPlan=rev.fy27Plan;
+  document.getElementById('trkNote').innerHTML=
+   'The AOP plan workbook, in &#8377; Lakhs at source. Its FY27 revenue plan of <b>'+fmtCr(fyPlan||0)+
+   '</b> ties exactly to the AOP driving the daily budget lines, and plan-total less IP+OP equals '+
+   'F&amp;B plus Other Income to the rupee &mdash; so this is the same plan, not a third basis. '+
+   'Actuals cover <b>'+nAct+' month'+(nAct===1?'':'s')+'</b> (Apr&ndash;'+(ch.labels[nAct-1]||'')+').';
+
+  const ach=(a,b)=>(nn(a)&&nn(b)&&b!==0)? a/b*100 : null;
+  const vs=(a,b,favGood)=>{ const r=ach(a,b); if(r==null) return {t:'',up:true};
+   const good=favGood? r>=100 : r<=100;
+   return {t:r.toFixed(0)+'% of plan ('+fmtCr(b)+')',up:good}; };
+  const st=(lbl,val,sub,cls)=>'<div class="vstat"><div class="vlbl">'+lbl+'</div><div class="vval'+
+    (cls?' '+cls:'')+'">'+val+'</div><div class="vsub">'+sub+'</div></div>';
+  const mg=(a,b)=>(nn(a)&&nn(b)&&b)? (a/b*100).toFixed(1)+'%' : '—';
+  document.getElementById('trkStrip').innerHTML=
+   st('YTD revenue',fmtCr(rev.ytdAct||0),vs(rev.ytdAct,rev.ytdPlan,true).t,
+      (ach(rev.ytdAct,rev.ytdPlan)>=100?'good':'bad'))+
+   st('YTD EBITDA',fmtCr(eb.ytdAct||0),'margin '+mg(eb.ytdAct,rev.ytdAct)+' · plan '+mg(eb.ytdPlan,rev.ytdPlan),
+      (ach(eb.ytdAct,eb.ytdPlan)>=100?'good':'bad'))+
+   st('YTD PAT',fmtCr(pat.ytdAct||0),'margin '+mg(pat.ytdAct,rev.ytdAct),
+      (ach(pat.ytdAct,pat.ytdPlan)>=100?'good':'bad'))+
+   st('FY27 plan',fmtCr(fyPlan||0),'FY26 actual '+fmtCr(rev.fy26Act||0)+' · +'+
+      ((rev.fy26Act&&fyPlan)?((fyPlan/rev.fy26Act-1)*100).toFixed(0):'—')+'%');
+
+  // dual August plan note
+  const augIdx=ch.labels.indexOf('Aug');
+  const trkAug=augIdx>=0? ch.revenue[augIdx].plan : null;
+  const aopAug=(D.aop&&D.aop.months)? (D.aop.months.find(m=>m.month==='August')||{}).total : null;
+  document.getElementById('trkAugNote').innerHTML=
+   'The daily budget lines on the <b>Daily operations</b> tab use the AOP monthly phasing, which puts '+
+   'August at <b>'+(nn(aopAug)?fmtCr(aopAug):'—')+'</b>. This tracker phases the same annual plan slightly '+
+   'differently and puts August at <b>'+(nn(trkAug)?fmtCr(trkAug):'—')+'</b>'+
+   ((nn(trkAug)&&nn(aopAug))? ' &mdash; a difference of '+fmtCr(trkAug-aopAug)+' ('+
+     ((trkAug/aopAug-1)*100).toFixed(1)+'%)':'')+'. '+
+   'The annual totals are identical; only the month-by-month split differs. '+
+   '<b>The AOP figure remains the governing budget</b> everywhere else on this dashboard, so published '+
+   'achievement percentages are unchanged; the tracker figure is shown here for reference only.';
+
+  renderTrkPl(); renderTrkInit(); drawTrkEb();
+ }
+
+ function renderTrkPl(){
+  const rev=trkLine('Total Revenue')||{};
+  document.getElementById('trkPlNote').innerHTML='&#8377; Cr, FY27 year-to-date. '+
+   'Variance is favourable when revenue beats plan or a cost line comes in under it &mdash; '+
+   'cost lines are scored in that direction, so green always means good.';
+  let rows=(T.lines||[]).filter(l=>nn(l.ytdPlan)||nn(l.ytdAct));
+  const varPc=l=>{ if(!nn(l.ytdPlan)||!l.ytdPlan||!nn(l.ytdAct)) return 0;
+   const d=(l.ytdAct-l.ytdPlan)/Math.abs(l.ytdPlan)*100;
+   return l.isCost? -d : d; };
+  if(trkMode==='var') rows=rows.slice().sort((a,b)=>varPc(a)-varPc(b));
+  const th=document.querySelector('#trkPl thead'), tb=document.querySelector('#trkPl tbody');
+  th.innerHTML='<tr><th>P&amp;L line</th><th class="r">FY26 act</th><th class="r">FY27 plan</th>'+
+   '<th class="r">YTD plan</th><th class="r">YTD act</th><th class="r">Var</th><th class="r">% of plan</th></tr>';
+  const c=v=>nn(v)?(v/CR).toFixed(2):'—';
+  tb.innerHTML=rows.map(l=>{
+   const d=(nn(l.ytdAct)&&nn(l.ytdPlan))? l.ytdAct-l.ytdPlan : null;
+   const fav=(d==null)? null : (l.isCost? d<=0 : d>=0);
+   const r=(nn(l.ytdPlan)&&l.ytdPlan)? (l.ytdAct/l.ytdPlan*100) : null;
+   return '<tr'+(l.isSub?' class="fytot"':'')+'><td>'+l.label+'</td>'+
+    '<td class="r">'+c(l.fy26Act)+'</td><td class="r">'+c(l.fy27Plan)+'</td>'+
+    '<td class="r">'+c(l.ytdPlan)+'</td><td class="r">'+c(l.ytdAct)+'</td>'+
+    '<td class="r '+(d==null?'flat':(fav?'good':'bad'))+'">'+(d==null?'—':((d>=0?'+':'')+(d/CR).toFixed(2)))+'</td>'+
+    '<td class="r '+(r==null?'flat':(fav?'good':'bad'))+'">'+(r==null?'—':r.toFixed(0)+'%')+'</td></tr>';
+  }).join('');
+ }
+
+ function renderTrkInit(){
+  const I=T.initiatives||[], tt=T.initTotals||{};
+  const rev=trkLine('Total Revenue')||{};
+  const growth=(nn(rev.fy27Plan)&&nn(rev.fy26Act))? rev.fy27Plan-rev.fy26Act : null;
+  document.getElementById('trkInitNote').innerHTML='&#8377; Cr. Full-year target and the phased build-up to date. '+
+   'Revenue initiatives total <b>'+fmtCr((tt.revImpact||{}).fullYear||0)+'</b> and cost savings <b>'+
+   fmtCr((tt.costSaving||{}).fullYear||0)+'</b>, a gross <b>'+fmtCr((tt.gross||{}).fullYear||0)+'</b>'+
+   (nn(tt.extraCost&&tt.extraCost.total)? ', against <b>'+fmtCr(tt.extraCost.total)+
+     '</b> of additional cost needed to land the revenue uplift':'')+'. '+
+   (growth!=null? 'For scale, the plan lifts revenue '+fmtCr(growth)+' over FY26 actual, so the revenue '+
+     'initiatives account for essentially all of the planned growth.':'');
+  const th=document.querySelector('#trkInit thead'), tb=document.querySelector('#trkInit tbody');
+  const nMonths=12;
+  th.innerHTML='<tr><th>Initiative</th><th>Type</th><th class="r">Full year</th>'+
+   '<th class="r">Booked to date</th><th class="r">% of target</th></tr>';
+  // "booked to date" = sum of phased months that have elapsed (same count as actuals)
+  const ch=T.chart||{revenue:[]};
+  const nAct=Math.max(1,ch.revenue.filter(x=>nn(x.act)).length);
+  let html='', section=null;
+  I.forEach(it=>{
+   if(it.section!==section){ section=it.section;
+    html+='<tr class="sep"><td colspan="5" style="font-weight:700;color:#8B1A4A">'+(section||'')+'</td></tr>'; }
+   const booked=it.months.slice(0,nAct).reduce((a,v)=>a+(nn(v)?v:0),0);
+   const pc=(nn(it.fullYear)&&it.fullYear)? booked/it.fullYear*100 : null;
+   html+='<tr><td>'+it.name+'</td><td style="color:#7F8C9B">'+(it.type||'')+'</td>'+
+    '<td class="r">'+(nn(it.fullYear)?(it.fullYear/CR).toFixed(2):'—')+'</td>'+
+    '<td class="r">'+(booked/CR).toFixed(2)+'</td>'+
+    '<td class="r '+(pc==null?'flat':(pc>=nAct/nMonths*100?'good':'bad'))+'">'+
+      (pc==null?'—':pc.toFixed(0)+'%')+'</td></tr>';
+  });
+  tb.innerHTML=html;
+ }
+
+ function drawTrkEb(){
+  const ch=T.chart; if(!ch) return;
+  const rev=ch.revenue.map(x=>x.act), eb=ch.ebitda;
+  const marg=eb.map((x,i)=>(nn(x.act)&&nn(rev[i])&&rev[i])? x.act/rev[i]*100 : null);
+  mk('trkEbChart',{data:{labels:ch.labels,datasets:[
+    {type:'bar',label:'EBITDA actual',data:eb.map(x=>nn(x.act)?x.act:null),backgroundColor:BLUE,yAxisID:'y'},
+    {type:'line',label:'EBITDA plan',data:eb.map(x=>nn(x.plan)?x.plan:null),borderColor:MAROON,
+     backgroundColor:MAROON,borderDash:[5,4],tension:.25,yAxisID:'y'},
+    {type:'line',label:'Margin % (actual)',data:marg,borderColor:GOLD,backgroundColor:GOLD,
+     tension:.25,yAxisID:'y1',spanGaps:false}]},
+   options:{responsive:true,
+    plugins:{tooltip:{callbacks:{label:c=>c.dataset.label+': '+
+      (c.dataset.yAxisID==='y1'? (c.parsed.y==null?'—':c.parsed.y.toFixed(1)+'%') : fmtCr(c.parsed.y||0))}}},
+    scales:{y:{...money,title:{display:true,text:'₹ Cr'}},
+     y1:{position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'margin %'},
+      ticks:{callback:v=>v.toFixed(0)+'%'}}}}});
+ }
+
  let drawn=false;
- window.drawFy27=function(){ paintBtns(); render(); if(!drawn){drawGroup();drawn=true;} };
+ window.drawFy27=function(){ paintBtns(); render(); renderTracker();
+  if(!drawn){drawGroup();drawn=true;} };
 })();
 </script></body></html>
 """

@@ -168,6 +168,144 @@ def parse_pl_summ(path):
     return {"month": month, "lines": lines}
 
 
+# ---- AOP performance tracker ---------------------------------------------
+# "VPS Lakehsore FY 27 Dashboard_<Mon>'YY.xlsx" — the AOP tracker. Three sheets:
+#   Performance Tracker : per-P&L-line FY26 actual, FY27 plan, YTD plan/actual/%achv,
+#                         then 12 month blocks of 4 cols (Plan, Actual, %Achv, %Rev)
+#                         starting at col 12 (Apr) and stepping 4.
+#   Dashboard           : chart block rows 42-53 = monthly revenue & EBITDA plan/actual.
+#   Monthly P&L         : rows 5-49 the plan P&L; rows 55-97 the initiative build-up
+#                         (col1 name, col2 type, col3 full-year, cols 4-15 monthly,
+#                          col16 total, col17 code), totals at rows 98-100.
+# All figures are Rs LAKHS in the sheet -> scaled to absolute INR here.
+# This workbook is the same plan as the AOP: FY27 total revenue ties to Rs 575.21 Cr
+# exactly, and plan-total less IP+OP equals F&B + Other Income to the rupee.
+LAKH = 1e5
+
+TRACKER_LINES = [
+    "IP Revenue", "IP Pharmacy", "OP Revenue", "OP Pharmacy", "Ayurveda",
+    "F&B / VPS Gourmet", "Other Income", "Total Revenue",
+    "Consumption / Drug & Consumables", "Doctor Cost", "Total Variable Cost",
+    "Contribution",
+    "Employee Cost", "Utilities & Power", "Lab Test Charges", "Rent Paid",
+    "Repair & Maintenance", "Housekeeping", "Security", "Printing & Stationery",
+    "Insurance", "Rates & Taxes", "Professional Fee", "Quality & Infection",
+    "Bad Debts Provision", "Marketing", "Communication", "Business Travel",
+    "Miscellaneous", "CSR", "Total Fixed Cost",
+    "EBITDA", "(-) Depreciation", "(-) Finance Cost", "PBT",
+    "(-) Tax @ 25.89%", "PAT",
+]
+SUBTOTAL_LINES = {"Total Revenue", "Total Variable Cost", "Contribution",
+                  "Total Fixed Cost", "EBITDA", "PBT", "PAT"}
+COST_LINES = {"Consumption / Drug & Consumables", "Doctor Cost", "Total Variable Cost",
+              "Employee Cost", "Utilities & Power", "Lab Test Charges", "Rent Paid",
+              "Repair & Maintenance", "Housekeeping", "Security",
+              "Printing & Stationery", "Insurance", "Rates & Taxes",
+              "Professional Fee", "Quality & Infection", "Bad Debts Provision",
+              "Marketing", "Communication", "Business Travel", "Miscellaneous",
+              "CSR", "Total Fixed Cost", "(-) Depreciation", "(-) Finance Cost",
+              "(-) Tax @ 25.89%"}
+
+
+def parse_tracker(path):
+    import openpyxl
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    out = {"source": os.path.basename(path)}
+
+    def sc(v):
+        v = _n(v)
+        return None if v is None else v * LAKH
+
+    # --- Performance Tracker ---
+    if "Performance Tracker" in wb.sheetnames:
+        ws = wb["Performance Tracker"]
+        rows = list(ws.iter_rows(min_row=1, max_row=60, max_col=60, values_only=True))
+        byname = {}
+        for r in rows:
+            if r and isinstance(r[0], str) and r[0].strip() in TRACKER_LINES:
+                byname.setdefault(r[0].strip(), r)
+        lines = []
+        for name in TRACKER_LINES:
+            r = byname.get(name)
+            if not r:
+                continue
+            months = []
+            for k in range(12):
+                c = 12 + 4 * k                       # 1-based col of this month's Plan
+                months.append({"plan": sc(r[c - 1]), "act": sc(r[c])})
+            lines.append({
+                "label": name,
+                "isSub": name in SUBTOTAL_LINES,
+                "isCost": name in COST_LINES,
+                "fy26Act": sc(r[1]),
+                "fy27Plan": sc(r[3]),
+                "ytdPlan": sc(r[6]),
+                "ytdAct": sc(r[7]),
+                "months": months,
+            })
+        out["lines"] = lines
+
+    # --- Dashboard chart block (monthly revenue / EBITDA plan vs actual) ---
+    if "Dashboard" in wb.sheetnames:
+        ws = wb["Dashboard"]
+        rev, eb, labels = [], [], []
+        for r in ws.iter_rows(min_row=42, max_row=53, max_col=7, values_only=True):
+            if not r or not r[0]:
+                continue
+            labels.append(r[0])
+            rev.append({"plan": sc(r[1]), "act": sc(r[2])})
+            eb.append({"plan": sc(r[5]), "act": sc(r[6])})
+        out["chart"] = {"labels": labels, "revenue": rev, "ebitda": eb}
+
+    # --- initiative build-up ---
+    if "Monthly P&L" in wb.sheetnames:
+        ws = wb["Monthly P&L"]
+        rows = {i: r for i, r in enumerate(
+            ws.iter_rows(min_row=1, max_row=115, max_col=17, values_only=True), 1)}
+        inits, section = [], None
+        for i in range(54, 98):
+            r = rows.get(i)
+            if not r or not isinstance(r[0], str):
+                continue
+            name = r[0].strip()
+            code = r[16] if len(r) > 16 else None
+            typ = r[1]
+            if not typ and not code:
+                section = name           # a section banner row
+                continue
+            inits.append({
+                "code": (str(code).strip() if code else None),
+                "name": name,
+                "type": typ,
+                "section": section,
+                "fullYear": sc(r[2]),
+                "months": [sc(r[3 + k]) for k in range(12)],
+            })
+        out["initiatives"] = inits
+        tot = {}
+        for i, key in ((98, "revImpact"), (99, "costSaving"), (100, "gross")):
+            r = rows.get(i)
+            if r:
+                tot[key] = {"fullYear": sc(r[2]),
+                            "months": [sc(r[3 + k]) for k in range(12)]}
+        # rows 103-107 = extra cost needed to land the revenue uplift; 109 = total
+        extra = []
+        for i in range(103, 108):
+            r = rows.get(i)
+            if r and isinstance(r[0], str) and r[0].strip():
+                extra.append({"label": r[0].strip(),
+                              "total": sc(r[15]),
+                              "months": [sc(r[3 + k]) for k in range(12)]})
+        r109 = rows.get(109)
+        tot["extraCost"] = {"lines": extra,
+                            "total": sc(r109[15]) if r109 else None,
+                            "months": [sc(r109[3 + k]) for k in range(12)] if r109 else []}
+        out["initTotals"] = tot
+
+    wb.close()
+    return out
+
+
 # ---- orchestration --------------------------------------------------------
 
 def find_fy27_folder(mis_folder):
@@ -246,12 +384,33 @@ def collect(mis_folder, tools_dir, verbose=True):
                 print("FY27: P&L parse failed for %s: %s" % (unit, e))
         result["source"].setdefault("pl", {})[unit] = os.path.basename(p)
 
+    # --- AOP performance tracker: newest "FY 27 Dashboard_*" workbook ---
+    trs = sorted(glob.glob(os.path.join(fy, "*FY 27 Dashboard*.xlsx")),
+                 key=lambda p: os.stat(p).st_mtime, reverse=True)
+    trs = [t for t in trs if not os.path.basename(t).startswith("~$")]
+    if trs:
+        tp = trs[0]
+        k = "trk|" + _sig(tp)
+        if k in cache:
+            result["tracker"] = cache[k]
+        else:
+            if verbose:
+                print("FY27: parsing tracker", os.path.basename(tp))
+            try:
+                t = parse_tracker(tp)
+                if t:
+                    result["tracker"] = t
+                    cache[k] = t
+            except Exception as e:
+                print("FY27: tracker parse failed:", e)
+        result["source"]["tracker"] = os.path.basename(tp)
+
     try:
         json.dump(cache, open(cache_path, "w"))
     except Exception:
         pass
 
-    if not result["monthly"] and not result["units"]:
+    if not result["monthly"] and not result["units"] and not result.get("tracker"):
         return None
 
     # basis note rendered on the page so nobody re-litigates the 152 vs 180 question
