@@ -308,6 +308,14 @@ def parse_tracker(path):
 
 # ---- orchestration --------------------------------------------------------
 
+BASIS_NOTE = (
+    "Monthly figures are ACTUALS from the BRM deck. P&L actual-vs-budget uses the "
+    "MIS pack, whose budget ties to the FY27 AOP (Rs 575 Cr plan / Rs 180.0 Cr YTD). "
+    "The BRM deck's own 'Treating Report basis' budget (Rs 480.5 Cr plan / Rs 152.0 Cr "
+    "YTD) is deliberately not used."
+)
+
+
 def find_fy27_folder(mis_folder):
     """FY27 sits alongside the Daily MIS Reports folder."""
     parent = os.path.dirname(os.path.abspath(mis_folder))
@@ -323,13 +331,66 @@ def _sig(p):
     return "%s|%d" % (os.path.basename(p), int(st.st_mtime))
 
 
+def _from_cache_only(tools_dir, verbose=True):
+    """Rebuild the fy27 payload from fy27_cache.json when the FY27 folder is not
+    reachable (e.g. only the MIS folder is mounted in a Cowork session). Keys are
+    '<kind>|<filename>|<mtime>'; the newest mtime per kind/unit wins."""
+    cache_path = os.path.join(tools_dir, "fy27_cache.json")
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        cache = json.load(open(cache_path))
+    except Exception:
+        return None
+    best = {}
+    for k, v in cache.items():
+        parts = k.split("|")
+        if len(parts) < 3:
+            continue
+        kind, fname, mt = parts[0], parts[1], parts[-1]
+        try:
+            mt = int(mt)
+        except Exception:
+            mt = 0
+        slot = kind
+        if kind == "pl":
+            unit = "Calicut" if "Calicut" in fname else ("Kochi" if "Kochi" in fname else fname)
+            slot = "pl|" + unit
+        if slot not in best or mt > best[slot][0]:
+            best[slot] = (mt, fname, v)
+    if not best:
+        return None
+    result = {"units": {}, "monthly": {}, "source": {}}
+    if "brm" in best:
+        result["monthly"] = best["brm"][2] or {}
+        result["source"]["brm"] = best["brm"][1]
+    if "trk" in best:
+        result["tracker"] = best["trk"][2]
+        result["source"]["tracker"] = best["trk"][1]
+    for slot, (mt, fname, v) in best.items():
+        if slot.startswith("pl|"):
+            result["units"][slot[3:]] = v
+            result["source"].setdefault("pl", {})[slot[3:]] = fname
+    if not result["monthly"] and not result["units"] and not result.get("tracker"):
+        return None
+    if verbose:
+        print("FY27: folder not reachable - rebuilt from cache (%d unit P&L, %d monthly blocks)"
+              % (len(result["units"]), len(result["monthly"])))
+    result["fromCache"] = True
+    return result
+
+
 def collect(mis_folder, tools_dir, verbose=True):
     """Returns the fy27 dict for the dashboard, or None. Caches by filename|mtime."""
     fy = find_fy27_folder(mis_folder)
     if not fy:
         if verbose:
-            print("FY27: folder not found; skipping")
-        return None
+            print("FY27: folder not found; falling back to cache")
+        r = _from_cache_only(tools_dir, verbose=verbose)
+        if r is not None:
+            r["months"] = MONTHS
+            r["basisNote"] = BASIS_NOTE
+        return r
 
     cache_path = os.path.join(tools_dir, "fy27_cache.json")
     cache = {}
@@ -414,7 +475,8 @@ def collect(mis_folder, tools_dir, verbose=True):
         return None
 
     # basis note rendered on the page so nobody re-litigates the 152 vs 180 question
-    result["basisNote"] = (
+    result["basisNote"] = BASIS_NOTE
+    _UNUSED = (
         "Monthly figures are ACTUALS from the BRM deck. P&L actual-vs-budget uses the "
         "MIS pack, whose budget ties to the FY27 AOP (Rs 575 Cr plan / Rs 180.0 Cr YTD). "
         "The BRM deck's own 'Treating Report basis' budget (Rs 480.5 Cr plan / Rs 152.0 Cr "

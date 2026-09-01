@@ -643,78 +643,83 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 
 <div class="panel vzn">
 <h2>Why August is running behind July</h2>
-<div class="note">Commentary refreshed as at 11-Aug-2026 (11 days). Calendar mix: Aug 1-11 contains <b>4 weekend days</b> against 3 in Jul 1-11 &mdash; but the mix now explains less of the gap than it did at the 10-day read: the ex-Sunday shortfall has widened from &minus;3.6% to &minus;6.5% after a soft Tuesday 11-Aug (&#8377;1.25 Cr, the weakest weekday of the month so far).</div>
+<div class="note">Commentary refreshed as at 30-Aug-2026 (30 of 31 days). Calendar mix: August carries <b>7 non-working days</b> (5 Sundays plus 15-Aug and Onam on 26-Aug) against 4 in July, which accounts for roughly half the headline gap &mdash; but the ex-Sunday deficit has widened again to &minus;8.5%, and the back-half Onam lift assumed at the 11-day read <b>did not materialise</b>: Aug 16-30 ran at &#8377;120.8 L/day against &#8377;144.7 L/day in Aug 1-15, where July built the other way (&#8377;155.5 &rarr; &#8377;162.0 L/day).</div>
 
 <div class="vstrip">
-  <div class="vstat"><div class="vlbl">Run-rate vs full July</div><div class="vval bad">-11.6%</div><div class="vsub">&#8377;159.2 L/day &rarr; &#8377;140.7 L/day (&minus;&#8377;18.5 L/day)</div></div>
-  <div class="vstat"><div class="vlbl">Ex-Sunday run-rate</div><div class="vval bad">-6.5%</div><div class="vsub">&#8377;178.5 &rarr; &#8377;166.9 L/day (&minus;&#8377;11.6 L/day)</div></div>
-  <div class="vstat"><div class="vlbl">MTD vs budget</div><div class="vval bad">-12.5%</div><div class="vsub">&#8377;15.48 Cr vs &#8377;17.69 Cr (&minus;&#8377;2.22 Cr)</div></div>
-  <div class="vstat"><div class="vlbl">Flash full-month projection</div><div class="vval bad">-19.4%</div><div class="vsub">&#8377;41.2 Cr vs &#8377;51.1 Cr budget (&minus;&#8377;9.9 Cr)</div></div>
+  <div class="vstat"><div class="vlbl">Run-rate vs full July</div><div class="vval bad">-16.7%</div><div class="vsub">&#8377;159.2 L/day &rarr; &#8377;132.7 L/day (&minus;&#8377;26.5 L/day)</div></div>
+  <div class="vstat"><div class="vlbl">Ex-Sunday / holiday run-rate</div><div class="vval bad">-8.5%</div><div class="vsub">&#8377;178.5 &rarr; &#8377;163.3 L/day (&minus;&#8377;15.2 L/day)</div></div>
+  <div class="vstat"><div class="vlbl">MTD vs budget</div><div class="vval bad">-18.9%</div><div class="vsub">&#8377;39.81 Cr vs &#8377;49.06 Cr (&minus;&#8377;9.25 Cr)</div></div>
+  <div class="vstat"><div class="vlbl">Flash full-month projection</div><div class="vval bad">-19.0%</div><div class="vsub">&#8377;41.4 Cr vs &#8377;51.1 Cr budget (&minus;&#8377;9.7 Cr)</div></div>
 </div>
 
 <div class="vgrid">
   <div class="vbox">
-    <h3>1 &middot; It is still volume, not price</h3>
-    <p>Realization is broadly holding (both per-unit measures within &minus;3%). The gap comes from fewer visits, fewer surgeries and a lighter census.</p>
-    <table class="vtab"><thead><tr><th>Measure</th><th class="r">July</th><th class="r">Aug 1-11</th><th class="r">&Delta;</th><th class="r">&Delta;%</th></tr></thead><tbody>
-      <tr><td>Revenue per discharge</td><td class="r">&#8377;2.17 L</td><td class="r">&#8377;2.10 L</td><td class="r flat">&minus;&#8377;0.07 L</td><td class="r flat">-3.1%</td></tr>
-      <tr><td>Revenue per OP visit</td><td class="r">&#8377;12,930</td><td class="r">&#8377;12,667</td><td class="r flat">&minus;&#8377;263</td><td class="r flat">-2.0%</td></tr>
-      <tr><td>ALOS</td><td class="r">3.83 d</td><td class="r">3.73 d</td><td class="r flat">&minus;0.10 d</td><td class="r flat">-2.6%</td></tr>
-      <tr class="sep"><td>OP visits / day</td><td class="r">1,232</td><td class="r">1,111</td><td class="r bad">&minus;121</td><td class="r bad">-9.8%</td></tr>
-      <tr><td>IP discharges / day</td><td class="r">73.5</td><td class="r">67.1</td><td class="r bad">&minus;6.4</td><td class="r bad">-8.8%</td></tr>
-      <tr><td>Surgeries / day</td><td class="r">20.0</td><td class="r">16.8</td><td class="r bad">&minus;3.2</td><td class="r bad">-16.1%</td></tr>
-      <tr><td>Bed occupancy</td><td class="r">60.0%</td><td class="r">53.2%</td><td class="r bad">&minus;6.8 pts</td><td class="r bad">-11.3%</td></tr>
-      <tr><td>Admissions / day</td><td class="r">71.5</td><td class="r">67.8</td><td class="r bad">&minus;3.6</td><td class="r bad">-5.1%</td></tr>
+    <h3>1 &middot; It is volume and census, not price</h3>
+    <p>Pricing is holding firmly &mdash; revenue per OP visit is actually <b>up</b> 0.6% and ARPOB is flat at &minus;0.8%. Essentially the entire shortfall is fewer visits, fewer surgeries and a lighter census.</p>
+    <table class="vtab"><thead><tr><th>Measure</th><th class="r">July</th><th class="r">Aug 1-30</th><th class="r">&Delta;</th><th class="r">&Delta;%</th></tr></thead><tbody>
+      <tr><td>Revenue per OP visit</td><td class="r">&#8377;12,930</td><td class="r">&#8377;13,002</td><td class="r good">+&#8377;72</td><td class="r good">+0.6%</td></tr>
+      <tr><td>ARPOB (&#8377;&rsquo;000/bed-day)</td><td class="r">56.5</td><td class="r">56.1</td><td class="r flat">&minus;0.4</td><td class="r flat">-0.8%</td></tr>
+      <tr><td>Revenue per discharge</td><td class="r">&#8377;2.17 L</td><td class="r">&#8377;2.12 L</td><td class="r flat">&minus;&#8377;0.05 L</td><td class="r flat">-2.3%</td></tr>
+      <tr><td>ALOS</td><td class="r">3.83 d</td><td class="r">3.78 d</td><td class="r flat">&minus;0.06 d</td><td class="r flat">-1.5%</td></tr>
+      <tr class="sep"><td>OP visits / day</td><td class="r">1,232</td><td class="r">1,021</td><td class="r bad">&minus;211</td><td class="r bad">-17.1%</td></tr>
+      <tr><td>Bed occupancy</td><td class="r">60.0%</td><td class="r">50.4%</td><td class="r bad">&minus;9.6 pts</td><td class="r bad">-16.0%</td></tr>
+      <tr><td>IP discharges / day</td><td class="r">73.5</td><td class="r">62.7</td><td class="r bad">&minus;10.8</td><td class="r bad">-14.8%</td></tr>
+      <tr><td>Surgeries / day</td><td class="r">20.0</td><td class="r">17.1</td><td class="r bad">&minus;2.9</td><td class="r bad">-14.6%</td></tr>
+      <tr><td>Admissions / day</td><td class="r">71.5</td><td class="r">62.1</td><td class="r bad">&minus;9.4</td><td class="r bad">-13.1%</td></tr>
     </tbody></table>
-    <p class="vfoot">Surgeries remain the steepest volume decline (&minus;16%). Occupancy is 6.8 points lighter on a slightly shorter ALOS &mdash; the census never rebuilt after the July month-end discharge run.</p>
+    <p class="vfoot">All three revenue lines fell in step &mdash; OP &minus;18.5%, IP &minus;17.7%, Pharmacy &minus;14.8% per day &mdash; which is the signature of a throughput problem, not a mix or rate problem. Flat ARPOB on a 9.6-point lighter census means revenue is tracking occupied beds almost exactly. <b>Watch collections:</b> cash conversion slipped to 91% of gross (&#8377;36.4 Cr) from 97% in July.</p>
   </div>
 
   <div class="vbox">
-    <h3>2 &middot; The gap is concentrated, not broad-based</h3>
-    <p>Declines total <b>&#8377;24.9 L/day</b>, offset by <b>&#8377;6.6 L/day</b> of gains, for a net <b>&#8377;18.3 L/day</b>. Nephrology and Medical Oncology alone are &#8377;9.4 L/day &mdash; <b>52% of the net gap</b>.</p>
+    <h3>2 &middot; The gap is now broad-based, not concentrated</h3>
+    <p>This is the material change since the 11-day read. Declines total <b>&#8377;29.3 L/day</b> against just <b>&#8377;1.4 L/day</b> of gains &mdash; the offsetting cluster has essentially disappeared. The top two decliners are now only <b>31% of the net gap</b> (52% at the 11-day read); every major department is down 15-37%.</p>
     <table class="vtab"><thead><tr><th>Department</th><th class="r">Jul &#8377;L/d</th><th class="r">Aug &#8377;L/d</th><th class="r">&Delta; &#8377;L/d</th><th class="r">&Delta;%</th></tr></thead><tbody>
-      <tr><td>Nephrology</td><td class="r">15.32</td><td class="r">10.58</td><td class="r bad">&minus;4.75</td><td class="r bad">-31%</td></tr>
-      <tr><td>Medical Oncology</td><td class="r">22.79</td><td class="r">18.12</td><td class="r bad">&minus;4.68</td><td class="r bad">-21%</td></tr>
-      <tr><td>GI Surgery</td><td class="r">6.07</td><td class="r">3.95</td><td class="r bad">&minus;2.13</td><td class="r bad">-35%</td></tr>
-      <tr><td>Gastroenterology</td><td class="r">8.19</td><td class="r">6.62</td><td class="r bad">&minus;1.57</td><td class="r bad">-19%</td></tr>
-      <tr><td>Ortho &mdash; Foot &amp; Ankle</td><td class="r">4.15</td><td class="r">2.84</td><td class="r bad">&minus;1.31</td><td class="r bad">-32%</td></tr>
-      <tr><td>General</td><td class="r">13.44</td><td class="r">12.41</td><td class="r bad">&minus;1.02</td><td class="r bad">-8%</td></tr>
-      <tr><td>Cardio Thoracic Surgery</td><td class="r">1.50</td><td class="r">0.58</td><td class="r bad">&minus;0.91</td><td class="r bad">-61%</td></tr>
-      <tr class="sep"><td>Neuro Surgery</td><td class="r">9.96</td><td class="r">12.07</td><td class="r good">+2.11</td><td class="r good">+21%</td></tr>
-      <tr><td>Neuro &amp; Vasc Interv Radiology</td><td class="r">0.85</td><td class="r">2.03</td><td class="r good">+1.18</td><td class="r good">+140%</td></tr>
-      <tr><td>Plastic Surgery</td><td class="r">0.98</td><td class="r">2.08</td><td class="r good">+1.10</td><td class="r good">+112%</td></tr>
-      <tr><td>Neurology</td><td class="r">4.11</td><td class="r">5.10</td><td class="r good">+0.99</td><td class="r good">+24%</td></tr>
-      <tr><td>Spine Surgery</td><td class="r">1.62</td><td class="r">1.89</td><td class="r good">+0.27</td><td class="r good">+17%</td></tr>
+      <tr><td>Medical Oncology</td><td class="r">22.66</td><td class="r">18.01</td><td class="r bad">&minus;4.66</td><td class="r bad">-21%</td></tr>
+      <tr><td>Nephrology</td><td class="r">15.21</td><td class="r">11.34</td><td class="r bad">&minus;3.87</td><td class="r bad">-25%</td></tr>
+      <tr><td>Gastroenterology</td><td class="r">8.12</td><td class="r">5.75</td><td class="r bad">&minus;2.37</td><td class="r bad">-29%</td></tr>
+      <tr><td>General / unallocated</td><td class="r">13.44</td><td class="r">11.10</td><td class="r bad">&minus;2.33</td><td class="r bad">-17%</td></tr>
+      <tr><td>Neuro Surgery</td><td class="r">9.87</td><td class="r">8.13</td><td class="r bad">&minus;1.75</td><td class="r bad">-18%</td></tr>
+      <tr><td>Cardiology</td><td class="r">8.95</td><td class="r">7.61</td><td class="r bad">&minus;1.34</td><td class="r bad">-15%</td></tr>
+      <tr><td>Orthopedics</td><td class="r">6.16</td><td class="r">4.84</td><td class="r bad">&minus;1.31</td><td class="r bad">-21%</td></tr>
+      <tr><td>GI Surgery</td><td class="r">5.99</td><td class="r">4.75</td><td class="r bad">&minus;1.25</td><td class="r bad">-21%</td></tr>
+      <tr><td>Comprehensive Liver Care</td><td class="r">3.21</td><td class="r">2.03</td><td class="r bad">&minus;1.18</td><td class="r bad">-37%</td></tr>
+      <tr><td>Anesthesiology</td><td class="r">5.36</td><td class="r">4.45</td><td class="r bad">&minus;0.91</td><td class="r bad">-17%</td></tr>
+      <tr class="sep"><td>Plastic Surgery</td><td class="r">0.97</td><td class="r">1.54</td><td class="r good">+0.56</td><td class="r good">+58%</td></tr>
+      <tr><td>Neuro &amp; Vasc Interv Radiology</td><td class="r">0.85</td><td class="r">1.34</td><td class="r good">+0.49</td><td class="r good">+58%</td></tr>
+      <tr><td>Nuclear Medicine</td><td class="r">0.69</td><td class="r">0.84</td><td class="r good">+0.15</td><td class="r good">+22%</td></tr>
     </tbody></table>
-    <p class="vfoot">Net service revenue from the flash department detail, averaged per calendar day. Cardiology has held its recovery (&minus;0.36 L/day, &minus;4%); Urology is a mild &minus;0.64 L/day.</p>
+    <p class="vfoot">Doctor-attributed revenue from the Daily MIS doctor sheets, aggregated to department and averaged per calendar day; covers 95.8% of gross. <b>Neuro Surgery is the key reversal</b> &mdash; it was the largest gainer at the 11-day read (+21%) and has since turned to &minus;18%. Gastroenterology and Comprehensive Liver Care are the two new entrants to the deep-decline list.</p>
   </div>
 
   <div class="vbox">
     <h3>3 &middot; Doctor-level movers</h3>
-    <p>The same concentration shows at consultant level: the top two decliners are <b>&#8377;8.9 L/day</b> between them, while the neuro-led cluster is adding back <b>&#8377;6.5 L/day</b>.</p>
+    <p>The two largest books account for <b>&#8377;7.9 L/day</b> between them, but the six largest gainers add back only <b>&#8377;2.9 L/day</b> &mdash; there is no longer a cluster big enough to offset. Both top decliners are losing <i>volume</i>, not rate.</p>
     <table class="vtab"><thead><tr><th>Consultant</th><th>Department</th><th class="r">Jul &#8377;L/d</th><th class="r">Aug &#8377;L/d</th><th class="r">&Delta; &#8377;L/d</th><th class="r">&Delta;%</th></tr></thead><tbody>
-      <tr><td class="doc">Gangadharan V P</td><td class="doc">Medical Oncology</td><td class="r">22.55</td><td class="r">17.92</td><td class="r bad">&minus;4.64</td><td class="r bad">-21%</td></tr>
-      <tr><td class="doc">Abi Abraham M</td><td class="doc">Nephrology</td><td class="r">10.58</td><td class="r">6.37</td><td class="r bad">&minus;4.22</td><td class="r bad">-40%</td></tr>
-      <tr><td class="doc">Rajesh Simon</td><td class="doc">Orthopedics</td><td class="r">3.14</td><td class="r">1.12</td><td class="r bad">&minus;2.02</td><td class="r bad">-64%</td></tr>
-      <tr><td class="doc">Cibi Issac</td><td class="doc">Cardiology</td><td class="r">3.67</td><td class="r">1.91</td><td class="r bad">&minus;1.75</td><td class="r bad">-48%</td></tr>
-      <tr><td class="doc">Ramesh H</td><td class="doc">GI Surgery</td><td class="r">4.11</td><td class="r">2.63</td><td class="r bad">&minus;1.47</td><td class="r bad">-36%</td></tr>
-      <tr><td class="doc">Maya P</td><td class="doc">Gastroenterology</td><td class="r">2.07</td><td class="r">0.97</td><td class="r bad">&minus;1.10</td><td class="r bad">-53%</td></tr>
-      <tr class="sep"><td class="doc">Arun Oommen</td><td class="doc">Neuro Surgery</td><td class="r">1.59</td><td class="r">3.33</td><td class="r good">+1.73</td><td class="r good">+109%</td></tr>
-      <tr><td class="doc">Abhijeet Wakure</td><td class="doc">Plastic Surgery</td><td class="r">0.20</td><td class="r">1.42</td><td class="r good">+1.22</td><td class="r good">+613%</td></tr>
-      <tr><td class="doc">Shaheer Ali P</td><td class="doc">Neuro &amp; Vasc Interv Radiology</td><td class="r">0.85</td><td class="r">2.03</td><td class="r good">+1.18</td><td class="r good">+140%</td></tr>
-      <tr><td class="doc">Roy J Mukkada</td><td class="doc">Gastroenterology</td><td class="r">3.23</td><td class="r">4.04</td><td class="r good">+0.81</td><td class="r good">+25%</td></tr>
-      <tr><td class="doc">Srivatsan Thirumalai</td><td class="doc">Neuro Surgery</td><td class="r">1.82</td><td class="r">2.63</td><td class="r good">+0.80</td><td class="r good">+44%</td></tr>
-      <tr><td class="doc">Dennis P Jose</td><td class="doc">Orthopedics</td><td class="r">0.97</td><td class="r">1.69</td><td class="r good">+0.72</td><td class="r good">+74%</td></tr>
+      <tr><td class="doc">Gangadharan V P</td><td class="doc">Medical Oncology</td><td class="r">22.55</td><td class="r">17.92</td><td class="r bad">&minus;4.63</td><td class="r bad">-21%</td></tr>
+      <tr><td class="doc">Abi Abraham M</td><td class="doc">Nephrology</td><td class="r">10.58</td><td class="r">7.31</td><td class="r bad">&minus;3.27</td><td class="r bad">-31%</td></tr>
+      <tr><td class="doc">LHRC (unallocated)</td><td class="doc">General</td><td class="r">13.44</td><td class="r">11.10</td><td class="r bad">&minus;2.33</td><td class="r bad">-17%</td></tr>
+      <tr><td class="doc">Sudish Karunakaran</td><td class="doc">Neuro Surgery</td><td class="r">4.54</td><td class="r">2.92</td><td class="r bad">&minus;1.62</td><td class="r bad">-36%</td></tr>
+      <tr><td class="doc">Cibi Issac</td><td class="doc">Cardiology</td><td class="r">3.67</td><td class="r">2.11</td><td class="r bad">&minus;1.56</td><td class="r bad">-42%</td></tr>
+      <tr><td class="doc">Rajesh Simon</td><td class="doc">Orthopedics</td><td class="r">3.14</td><td class="r">1.84</td><td class="r bad">&minus;1.30</td><td class="r bad">-41%</td></tr>
+      <tr><td class="doc">Fadl H Veerankutty</td><td class="doc">Comprehensive Liver Care</td><td class="r">2.91</td><td class="r">1.74</td><td class="r bad">&minus;1.17</td><td class="r bad">-40%</td></tr>
+      <tr><td class="doc">Ajith C Kuriakose</td><td class="doc">Gastroenterology</td><td class="r">1.36</td><td class="r">0.31</td><td class="r bad">&minus;1.05</td><td class="r bad">-77%</td></tr>
+      <tr><td class="doc">Maya P</td><td class="doc">Gastroenterology</td><td class="r">2.07</td><td class="r">1.23</td><td class="r bad">&minus;0.84</td><td class="r bad">-41%</td></tr>
+      <tr class="sep"><td class="doc">Abhijeet Wakure</td><td class="doc">Plastic Surgery</td><td class="r">0.20</td><td class="r">1.03</td><td class="r good">+0.83</td><td class="r good">+416%</td></tr>
+      <tr><td class="doc">Arun Oommen</td><td class="doc">Neuro Surgery</td><td class="r">1.59</td><td class="r">2.32</td><td class="r good">+0.73</td><td class="r good">+46%</td></tr>
+      <tr><td class="doc">Shaheer Ali P</td><td class="doc">Neuro &amp; Vasc Interv Radiology</td><td class="r">0.85</td><td class="r">1.34</td><td class="r good">+0.49</td><td class="r good">+58%</td></tr>
+      <tr><td class="doc">Ebin Rahman</td><td class="doc">Orthopedics</td><td class="r">0.06</td><td class="r">0.39</td><td class="r good">+0.34</td><td class="r good">+613%</td></tr>
+      <tr><td class="doc">Jithin S Kumar</td><td class="doc">Nephrology</td><td class="r">1.78</td><td class="r">2.05</td><td class="r good">+0.27</td><td class="r good">+15%</td></tr>
+      <tr><td class="doc">Smitha Joy</td><td class="doc">OB &amp; Gynec.</td><td class="r">1.42</td><td class="r">1.66</td><td class="r good">+0.23</td><td class="r good">+16%</td></tr>
     </tbody></table>
-    <p class="vfoot">Doctor-attributed revenue from the Daily MIS doctor sheets; covers 97% of gross.</p>
+    <p class="vfoot">Volume, not rate: <b>Dr. Gangadharan</b> OP visits 3,182 &rarr; 2,482 (&minus;22%) with day-care admissions only &minus;9% &mdash; the decline is in the OP/chemo funnel. <b>Dr. Abi Abraham</b> OP visits 888 &rarr; 665 (&minus;25%) and discharges 78 &rarr; 43 (&minus;45%) &mdash; his is an IP/dialysis-admission problem. Dr. Anandkumar (+5%) is the only large cardiology book holding; Dr. Roy J Mukkada has slipped to &minus;6% after a +25% first-third read.</p>
   </div>
 
   <div class="vbox read">
     <h3>4 &middot; The read</h3>
-    <p><b>The gap is widening, and it is now less about the calendar.</b> At the 10-day read roughly half the headline shortfall was weekend mix; after Tuesday 11-Aug came in at &#8377;1.25 Cr the ex-Sunday gap has doubled to &minus;6.5%, and the full-month projection has slipped to &#8377;41.2 Cr (&minus;&#8377;9.9 Cr vs budget). Weekday throughput itself is now soft.</p>
-    <p>The concentration is unchanged: Nephrology remains the deepest drag (Dr. Abi Abraham &minus;40%, &minus;&#8377;4.2 L/day &mdash; dialysis revenue tracks scheduled slots filled) with Medical Oncology steady at &minus;21% on Dr. Gangadharan's book. Cardiology has held its recovery (dept &minus;4%) as Dr. Anandkumar offsets Dr. Cibi Issac. The neuro cluster keeps compounding (+&#8377;6.6 L/day gross) but its offset is not growing as fast as the decliners are deepening. Watch items: GI Surgery (&minus;35%), Ortho &mdash; Dr. Rajesh Simon (&minus;64%), and Gastroenterology ex-Mukkada.</p>
-    <p><b>What to test first:</b> dialysis session counts and slot utilisation for 01-11 August vs July; chemotherapy day-care volumes; OT list utilisation (surgeries/day &minus;16% is the steepest operational decline); consultant availability for Nephrology, Medical Oncology, GI Surgery and Orthopedics; and whether the 10% OP funnel decline is walk-in or referral-led.</p>
-    <p class="vwarn">Caveat: Onam falls later in August and typically lifts elective volumes in the back half &mdash; the &#8377;41.2 Cr projection assumes the current run-rate holds and should be re-read after 15 August. If the back-half lift does not materialise, August lands roughly &#8377;8-10 Cr short of plan.</p>
+    <p><b>August lands where the downside case pointed, and the problem has broadened.</b> The 11-day commentary flagged that if the Onam back-half lift failed, August would come in &#8377;8-10 Cr short of plan. It failed &mdash; the back half ran 17% <i>below</i> the front half &mdash; and the flash projection is &#8377;41.4 Cr against &#8377;51.1 Cr budget, a &#8377;9.7 Cr miss. Calendar explains roughly half the &minus;16.7% headline; the remaining &minus;8.5% ex-Sunday deficit is genuine weekday throughput.</p>
+    <p>The important shift is structural, not arithmetic. In the first third the shortfall was two departments deep and a neuro-led cluster was adding back &#8377;6.5 L/day. At 30 days, declines outweigh gains 21:1, Neuro Surgery has itself turned &minus;18%, and the ex-Gangadharan / ex-Abi Abraham gap is now the majority of the problem. That argues against a consultant-availability explanation and towards a <b>demand or funnel issue</b>: OP visits &minus;17% with revenue per visit flat is the funnel narrowing at the top, not patients converting worse or paying less.</p>
+    <p><b>What to test first:</b> (1) the OP funnel &mdash; split the &minus;211 visits/day into walk-in vs referral vs follow-up, since flat realization points squarely here; (2) chemotherapy day-care slots booked vs filled for Dr. Gangadharan's book, which alone is &#8377;4.6 L/day; (3) dialysis and nephrology admission slots for Dr. Abi Abraham, where discharges halved; (4) OT list utilisation &mdash; surgeries &minus;14.6% on a 9.6-point lighter census; (5) the collections slip to 91% cash conversion, which may be a billing-cycle artefact but is worth confirming before month-end close.</p>
+    <p class="vwarn">Caveat: one day of August (31-Aug) is still outstanding, and the &#8377;41.4 Cr projection assumes it lands near the recent weekday run-rate. September opens with a cleaner calendar (4 Sundays, no major festival), so a flat sequential September would still show a double-digit improvement in run-rate &mdash; the test of whether the funnel is repairing is the ex-Sunday weekday number, not the headline.</p>
   </div>
 </div>
 </div>
