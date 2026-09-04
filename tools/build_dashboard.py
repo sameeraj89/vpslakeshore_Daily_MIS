@@ -20,6 +20,22 @@ import openpyxl
 FY_MONTHS = ["APRIL","MAY","JUNE","JULY","AUGUST","SEPTEMBER","OCTOBER",
              "NOVEMBER","DECEMBER","JANUARY","FEBRUARY","MARCH"]
 
+# ---------------------------------------------------------------------------
+# Declared non-working days, other than Sundays. THE ONE LIST TO MAINTAIN.
+# The variance panel uses this to separate calendar effect from real
+# throughput: everything else on that panel is computed from the data.
+# Add movable festival dates (Onam, Vishu, Eid, Easter) as they are declared;
+# a month with nothing listed simply reports its Sundays.
+# ---------------------------------------------------------------------------
+HOLIDAYS = {
+    "2026-08-15": "Independence Day",
+    "2026-08-26": "Thiruvonam",
+    "2026-10-02": "Gandhi Jayanti",
+    "2026-12-25": "Christmas",
+    "2027-01-26": "Republic Day",
+    "2027-05-01": "May Day",
+}
+
 def file_date(path):
     m = re.search(r'(\d{2})-(\d{2})-(\d{4})', os.path.basename(path))
     if not m: return None
@@ -534,6 +550,7 @@ def main():
         nDischarges=len(discharges),
         aop=aop,
         fy27=fy27,
+        holidays=HOLIDAYS,
     )
     out = os.path.join(folder, "LHRC_Revenue_Dashboard.html")
     open(out, "w", encoding="utf-8").write(TEMPLATE.replace("__DATA__", json.dumps(data)))
@@ -641,87 +658,13 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <div class="wrap view on" id="viewOps">
 <div class="cards" id="cards"></div>
 
-<div class="panel vzn">
-<h2>Why August is running behind July</h2>
-<div class="note">Commentary refreshed as at 30-Aug-2026 (30 of 31 days). Calendar mix: August carries <b>7 non-working days</b> (5 Sundays plus 15-Aug and Onam on 26-Aug) against 4 in July, which accounts for roughly half the headline gap &mdash; but the ex-Sunday deficit has widened again to &minus;8.5%, and the back-half Onam lift assumed at the 11-day read <b>did not materialise</b>: Aug 16-30 ran at &#8377;120.8 L/day against &#8377;144.7 L/day in Aug 1-15, where July built the other way (&#8377;155.5 &rarr; &#8377;162.0 L/day).</div>
+<div id="mtdStrip"></div>
+<div class="panel vzn" id="vznPanel">
+<h2 id="vznTitle">Month-on-month variance</h2>
+<div class="note" id="vznNote"></div>
 
-<div class="vstrip">
-  <div class="vstat"><div class="vlbl">Run-rate vs full July</div><div class="vval bad">-16.7%</div><div class="vsub">&#8377;159.2 L/day &rarr; &#8377;132.7 L/day (&minus;&#8377;26.5 L/day)</div></div>
-  <div class="vstat"><div class="vlbl">Ex-Sunday / holiday run-rate</div><div class="vval bad">-8.5%</div><div class="vsub">&#8377;178.5 &rarr; &#8377;163.3 L/day (&minus;&#8377;15.2 L/day)</div></div>
-  <div class="vstat"><div class="vlbl">MTD vs budget</div><div class="vval bad">-18.9%</div><div class="vsub">&#8377;39.81 Cr vs &#8377;49.06 Cr (&minus;&#8377;9.25 Cr)</div></div>
-  <div class="vstat"><div class="vlbl">Flash full-month projection</div><div class="vval bad">-19.0%</div><div class="vsub">&#8377;41.4 Cr vs &#8377;51.1 Cr budget (&minus;&#8377;9.7 Cr)</div></div>
-</div>
-
-<div class="vgrid">
-  <div class="vbox">
-    <h3>1 &middot; It is volume and census, not price</h3>
-    <p>Pricing is holding firmly &mdash; revenue per OP visit is actually <b>up</b> 0.6% and ARPOB is flat at &minus;0.8%. Essentially the entire shortfall is fewer visits, fewer surgeries and a lighter census.</p>
-    <table class="vtab"><thead><tr><th>Measure</th><th class="r">July</th><th class="r">Aug 1-30</th><th class="r">&Delta;</th><th class="r">&Delta;%</th></tr></thead><tbody>
-      <tr><td>Revenue per OP visit</td><td class="r">&#8377;12,930</td><td class="r">&#8377;13,002</td><td class="r good">+&#8377;72</td><td class="r good">+0.6%</td></tr>
-      <tr><td>ARPOB (&#8377;&rsquo;000/bed-day)</td><td class="r">56.5</td><td class="r">56.1</td><td class="r flat">&minus;0.4</td><td class="r flat">-0.8%</td></tr>
-      <tr><td>Revenue per discharge</td><td class="r">&#8377;2.17 L</td><td class="r">&#8377;2.12 L</td><td class="r flat">&minus;&#8377;0.05 L</td><td class="r flat">-2.3%</td></tr>
-      <tr><td>ALOS</td><td class="r">3.83 d</td><td class="r">3.78 d</td><td class="r flat">&minus;0.06 d</td><td class="r flat">-1.5%</td></tr>
-      <tr class="sep"><td>OP visits / day</td><td class="r">1,232</td><td class="r">1,021</td><td class="r bad">&minus;211</td><td class="r bad">-17.1%</td></tr>
-      <tr><td>Bed occupancy</td><td class="r">60.0%</td><td class="r">50.4%</td><td class="r bad">&minus;9.6 pts</td><td class="r bad">-16.0%</td></tr>
-      <tr><td>IP discharges / day</td><td class="r">73.5</td><td class="r">62.7</td><td class="r bad">&minus;10.8</td><td class="r bad">-14.8%</td></tr>
-      <tr><td>Surgeries / day</td><td class="r">20.0</td><td class="r">17.1</td><td class="r bad">&minus;2.9</td><td class="r bad">-14.6%</td></tr>
-      <tr><td>Admissions / day</td><td class="r">71.5</td><td class="r">62.1</td><td class="r bad">&minus;9.4</td><td class="r bad">-13.1%</td></tr>
-    </tbody></table>
-    <p class="vfoot">All three revenue lines fell in step &mdash; OP &minus;18.5%, IP &minus;17.7%, Pharmacy &minus;14.8% per day &mdash; which is the signature of a throughput problem, not a mix or rate problem. Flat ARPOB on a 9.6-point lighter census means revenue is tracking occupied beds almost exactly. <b>Watch collections:</b> cash conversion slipped to 91% of gross (&#8377;36.4 Cr) from 97% in July.</p>
-  </div>
-
-  <div class="vbox">
-    <h3>2 &middot; The gap is now broad-based, not concentrated</h3>
-    <p>This is the material change since the 11-day read. Declines total <b>&#8377;29.3 L/day</b> against just <b>&#8377;1.4 L/day</b> of gains &mdash; the offsetting cluster has essentially disappeared. The top two decliners are now only <b>31% of the net gap</b> (52% at the 11-day read); every major department is down 15-37%.</p>
-    <table class="vtab"><thead><tr><th>Department</th><th class="r">Jul &#8377;L/d</th><th class="r">Aug &#8377;L/d</th><th class="r">&Delta; &#8377;L/d</th><th class="r">&Delta;%</th></tr></thead><tbody>
-      <tr><td>Medical Oncology</td><td class="r">22.66</td><td class="r">18.01</td><td class="r bad">&minus;4.66</td><td class="r bad">-21%</td></tr>
-      <tr><td>Nephrology</td><td class="r">15.21</td><td class="r">11.34</td><td class="r bad">&minus;3.87</td><td class="r bad">-25%</td></tr>
-      <tr><td>Gastroenterology</td><td class="r">8.12</td><td class="r">5.75</td><td class="r bad">&minus;2.37</td><td class="r bad">-29%</td></tr>
-      <tr><td>General / unallocated</td><td class="r">13.44</td><td class="r">11.10</td><td class="r bad">&minus;2.33</td><td class="r bad">-17%</td></tr>
-      <tr><td>Neuro Surgery</td><td class="r">9.87</td><td class="r">8.13</td><td class="r bad">&minus;1.75</td><td class="r bad">-18%</td></tr>
-      <tr><td>Cardiology</td><td class="r">8.95</td><td class="r">7.61</td><td class="r bad">&minus;1.34</td><td class="r bad">-15%</td></tr>
-      <tr><td>Orthopedics</td><td class="r">6.16</td><td class="r">4.84</td><td class="r bad">&minus;1.31</td><td class="r bad">-21%</td></tr>
-      <tr><td>GI Surgery</td><td class="r">5.99</td><td class="r">4.75</td><td class="r bad">&minus;1.25</td><td class="r bad">-21%</td></tr>
-      <tr><td>Comprehensive Liver Care</td><td class="r">3.21</td><td class="r">2.03</td><td class="r bad">&minus;1.18</td><td class="r bad">-37%</td></tr>
-      <tr><td>Anesthesiology</td><td class="r">5.36</td><td class="r">4.45</td><td class="r bad">&minus;0.91</td><td class="r bad">-17%</td></tr>
-      <tr class="sep"><td>Plastic Surgery</td><td class="r">0.97</td><td class="r">1.54</td><td class="r good">+0.56</td><td class="r good">+58%</td></tr>
-      <tr><td>Neuro &amp; Vasc Interv Radiology</td><td class="r">0.85</td><td class="r">1.34</td><td class="r good">+0.49</td><td class="r good">+58%</td></tr>
-      <tr><td>Nuclear Medicine</td><td class="r">0.69</td><td class="r">0.84</td><td class="r good">+0.15</td><td class="r good">+22%</td></tr>
-    </tbody></table>
-    <p class="vfoot">Doctor-attributed revenue from the Daily MIS doctor sheets, aggregated to department and averaged per calendar day; covers 95.8% of gross. <b>Neuro Surgery is the key reversal</b> &mdash; it was the largest gainer at the 11-day read (+21%) and has since turned to &minus;18%. Gastroenterology and Comprehensive Liver Care are the two new entrants to the deep-decline list.</p>
-  </div>
-
-  <div class="vbox">
-    <h3>3 &middot; Doctor-level movers</h3>
-    <p>The two largest books account for <b>&#8377;7.9 L/day</b> between them, but the six largest gainers add back only <b>&#8377;2.9 L/day</b> &mdash; there is no longer a cluster big enough to offset. Both top decliners are losing <i>volume</i>, not rate.</p>
-    <table class="vtab"><thead><tr><th>Consultant</th><th>Department</th><th class="r">Jul &#8377;L/d</th><th class="r">Aug &#8377;L/d</th><th class="r">&Delta; &#8377;L/d</th><th class="r">&Delta;%</th></tr></thead><tbody>
-      <tr><td class="doc">Gangadharan V P</td><td class="doc">Medical Oncology</td><td class="r">22.55</td><td class="r">17.92</td><td class="r bad">&minus;4.63</td><td class="r bad">-21%</td></tr>
-      <tr><td class="doc">Abi Abraham M</td><td class="doc">Nephrology</td><td class="r">10.58</td><td class="r">7.31</td><td class="r bad">&minus;3.27</td><td class="r bad">-31%</td></tr>
-      <tr><td class="doc">LHRC (unallocated)</td><td class="doc">General</td><td class="r">13.44</td><td class="r">11.10</td><td class="r bad">&minus;2.33</td><td class="r bad">-17%</td></tr>
-      <tr><td class="doc">Sudish Karunakaran</td><td class="doc">Neuro Surgery</td><td class="r">4.54</td><td class="r">2.92</td><td class="r bad">&minus;1.62</td><td class="r bad">-36%</td></tr>
-      <tr><td class="doc">Cibi Issac</td><td class="doc">Cardiology</td><td class="r">3.67</td><td class="r">2.11</td><td class="r bad">&minus;1.56</td><td class="r bad">-42%</td></tr>
-      <tr><td class="doc">Rajesh Simon</td><td class="doc">Orthopedics</td><td class="r">3.14</td><td class="r">1.84</td><td class="r bad">&minus;1.30</td><td class="r bad">-41%</td></tr>
-      <tr><td class="doc">Fadl H Veerankutty</td><td class="doc">Comprehensive Liver Care</td><td class="r">2.91</td><td class="r">1.74</td><td class="r bad">&minus;1.17</td><td class="r bad">-40%</td></tr>
-      <tr><td class="doc">Ajith C Kuriakose</td><td class="doc">Gastroenterology</td><td class="r">1.36</td><td class="r">0.31</td><td class="r bad">&minus;1.05</td><td class="r bad">-77%</td></tr>
-      <tr><td class="doc">Maya P</td><td class="doc">Gastroenterology</td><td class="r">2.07</td><td class="r">1.23</td><td class="r bad">&minus;0.84</td><td class="r bad">-41%</td></tr>
-      <tr class="sep"><td class="doc">Abhijeet Wakure</td><td class="doc">Plastic Surgery</td><td class="r">0.20</td><td class="r">1.03</td><td class="r good">+0.83</td><td class="r good">+416%</td></tr>
-      <tr><td class="doc">Arun Oommen</td><td class="doc">Neuro Surgery</td><td class="r">1.59</td><td class="r">2.32</td><td class="r good">+0.73</td><td class="r good">+46%</td></tr>
-      <tr><td class="doc">Shaheer Ali P</td><td class="doc">Neuro &amp; Vasc Interv Radiology</td><td class="r">0.85</td><td class="r">1.34</td><td class="r good">+0.49</td><td class="r good">+58%</td></tr>
-      <tr><td class="doc">Ebin Rahman</td><td class="doc">Orthopedics</td><td class="r">0.06</td><td class="r">0.39</td><td class="r good">+0.34</td><td class="r good">+613%</td></tr>
-      <tr><td class="doc">Jithin S Kumar</td><td class="doc">Nephrology</td><td class="r">1.78</td><td class="r">2.05</td><td class="r good">+0.27</td><td class="r good">+15%</td></tr>
-      <tr><td class="doc">Smitha Joy</td><td class="doc">OB &amp; Gynec.</td><td class="r">1.42</td><td class="r">1.66</td><td class="r good">+0.23</td><td class="r good">+16%</td></tr>
-    </tbody></table>
-    <p class="vfoot">Volume, not rate: <b>Dr. Gangadharan</b> OP visits 3,182 &rarr; 2,482 (&minus;22%) with day-care admissions only &minus;9% &mdash; the decline is in the OP/chemo funnel. <b>Dr. Abi Abraham</b> OP visits 888 &rarr; 665 (&minus;25%) and discharges 78 &rarr; 43 (&minus;45%) &mdash; his is an IP/dialysis-admission problem. Dr. Anandkumar (+5%) is the only large cardiology book holding; Dr. Roy J Mukkada has slipped to &minus;6% after a +25% first-third read.</p>
-  </div>
-
-  <div class="vbox read">
-    <h3>4 &middot; The read</h3>
-    <p><b>August lands where the downside case pointed, and the problem has broadened.</b> The 11-day commentary flagged that if the Onam back-half lift failed, August would come in &#8377;8-10 Cr short of plan. It failed &mdash; the back half ran 17% <i>below</i> the front half &mdash; and the flash projection is &#8377;41.4 Cr against &#8377;51.1 Cr budget, a &#8377;9.7 Cr miss. Calendar explains roughly half the &minus;16.7% headline; the remaining &minus;8.5% ex-Sunday deficit is genuine weekday throughput.</p>
-    <p>The important shift is structural, not arithmetic. In the first third the shortfall was two departments deep and a neuro-led cluster was adding back &#8377;6.5 L/day. At 30 days, declines outweigh gains 21:1, Neuro Surgery has itself turned &minus;18%, and the ex-Gangadharan / ex-Abi Abraham gap is now the majority of the problem. That argues against a consultant-availability explanation and towards a <b>demand or funnel issue</b>: OP visits &minus;17% with revenue per visit flat is the funnel narrowing at the top, not patients converting worse or paying less.</p>
-    <p><b>What to test first:</b> (1) the OP funnel &mdash; split the &minus;211 visits/day into walk-in vs referral vs follow-up, since flat realization points squarely here; (2) chemotherapy day-care slots booked vs filled for Dr. Gangadharan's book, which alone is &#8377;4.6 L/day; (3) dialysis and nephrology admission slots for Dr. Abi Abraham, where discharges halved; (4) OT list utilisation &mdash; surgeries &minus;14.6% on a 9.6-point lighter census; (5) the collections slip to 91% cash conversion, which may be a billing-cycle artefact but is worth confirming before month-end close.</p>
-    <p class="vwarn">Caveat: one day of August (31-Aug) is still outstanding, and the &#8377;41.4 Cr projection assumes it lands near the recent weekday run-rate. September opens with a cleaner calendar (4 Sundays, no major festival), so a flat sequential September would still show a double-digit improvement in run-rate &mdash; the test of whether the funnel is repairing is the ex-Sunday weekday number, not the headline.</p>
-  </div>
-</div>
+<div class="vstrip" id="vznStrip"></div>
+<div class="vgrid" id="vznGrid"></div>
 </div>
 
 <div class="panel"><h2>Daily Gross Revenue — Actual vs Budget</h2>
@@ -800,7 +743,7 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <div class="wrap view" id="viewProj">
 <div class="panel" style="border-top:3px solid var(--maroon)">
 <h2>Projection assumptions</h2>
-<div class="note">Closed months are actual. The current month is month-to-date banked revenue plus remaining days at the run-rate. Aug onward is run-rate &times; calendar days, flexed by the options below.</div>
+<div class="note" id="projBasisNote">Closed months are actual. The current month is month-to-date banked revenue plus remaining days at the run-rate. Later months are run-rate &times; calendar days, flexed by the options below.</div>
 <div class="ctrls">
  <div class="ctrl"><span class="cl">Run-rate window</span>
   <span id="rrBtns"></span></div>
@@ -931,7 +874,7 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <div class="note">&#8377; Cr. Bars = actual, line = AOP plan. Marker labels show EBITDA margin on actual revenue.</div>
 <canvas id="trkEbChart"></canvas></div>
 
-<div class="panel vzn"><h2>Two August plan figures</h2>
+<div class="panel vzn"><h2>Two <span id="trkAugMon">monthly</span> plan figures</h2>
 <div class="note" id="trkAugNote"></div></div>
 
 <div class="panel"><h2>P&amp;L detail &mdash; plan vs actual</h2>
@@ -1051,6 +994,358 @@ document.getElementById('cards').innerHTML=
  card('ALOS (MTD)',(lastEff.alos||0).toFixed(1)+' d','prev mo '+(prevEff.alos||0).toFixed(1)+' d','')+
  card('Bed Occupancy (MTD)',(bo[1]*100).toFixed(0)+'%','YTD '+(bo[2]*100).toFixed(0)+'%','')+
  card('OP→IP Conversion',(conv[0]*100).toFixed(1)+'%','YTD '+(conv[1]*100).toFixed(1)+'%','');
+
+// ===========================================================================
+// Auto-generated month-on-month variance panel.
+// Compares the latest CLOSED month against the previous month with data.
+// Every figure, table row and sentence below is derived from D at render
+// time — nothing here is hand-written, so it cannot go stale.
+// ===========================================================================
+(function(){
+ const HOL=D.holidays||{};
+ const ACR=/^(LHRC|GI|OP|IP|ICU|CT|MRI|OB|ENT|NICU|PICU|CCU)$/;
+ const nmT=s=>String(s).split(' ').map(w=>ACR.test(w)?w:tc(w)).join(' ');
+ const MONF=['January','February','March','April','May','June','July',
+             'August','September','October','November','December'];
+ const dim=mk=>{const [y,m]=mk.split('-').map(Number);return new Date(y,m,0).getDate()};
+ const mLong=mk=>{const [y,m]=mk.split('-').map(Number);return MONF[m-1]};
+ const sgn=v=>(v>=0?'+':'−')+Math.abs(v).toFixed(1);
+ const cls=(v,inv)=>{const t=inv?-v:v;return t>1.5?'good':t<-1.5?'bad':'flat'};
+ const fL=v=>'₹'+v.toFixed(2)+' L';
+ const fLd=v=>'₹'+v.toFixed(1)+' L';
+ const iN=v=>Math.round(v).toLocaleString('en-IN');
+
+ // ---- pick the months -----------------------------------------------------
+ const keys=Object.keys(D.daily).filter(k=>(D.daily[k]||[]).length).sort();
+ const closed=keys.filter(k=>D.daily[k].length>=dim(k));
+ const tgt=closed[closed.length-1];
+ if(!tgt){document.getElementById('vznPanel').style.display='none';return;}
+ const base=keys.filter(k=>k<tgt).pop();
+ const liveK=keys[keys.length-1];
+ const live=(liveK>tgt)? liveK : null;
+
+ // ---- per-month statistics ----------------------------------------------
+ function stats(mk){
+  if(!mk) return null;
+  const R=D.daily[mk]||[], H=D.history[mk]||null, E=D.momFY[mk]||null;
+  const n=R.length;
+  const isSun=r=>r.dow==='Sun', isHol=r=>!!HOL[r.date]&&!isSun(r);
+  const wk=R.filter(r=>!isSun(r)&&!isHol(r));
+  const sum=(a,f)=>a.reduce((s,r)=>s+(+r[f]||0),0);
+  const S={mk,n,R,H,E,
+    label:mLong(mk),
+    complete:n>=dim(mk),
+    sundays:R.filter(isSun).length,
+    hols:R.filter(isHol).map(r=>HOL[r.date]),
+    holDates:R.filter(isHol).map(r=>r.date),
+    wkDays:wk.length,
+    rev:sum(R,'revTot'), bud:sum(R,'budTot'),
+    revOP:sum(R,'revOP'), revIP:sum(R,'revIP'), revPH:sum(R,'revPH'),
+    opv:sum(R,'opVisits'), ipd:sum(R,'ipDisch'),
+    coll:sum(R,'collTot'),
+    wkRev:sum(wk,'revTot')};
+  S.wkOpv=sum(wk,'opVisits');
+  S.perDay=S.rev/n; S.wkPerDay=S.wkDays? S.wkRev/S.wkDays:0;
+  S.wkOpvPerDay=S.wkDays? S.wkOpv/S.wkDays:0;
+  S.opPerDay=S.revOP/n; S.ipPerDay=S.revIP/n; S.phPerDay=S.revPH/n;
+  S.opvPerDay=S.opv/n; S.ipdPerDay=S.ipd/n;
+  S.revPerOpv=S.opv? S.revOP/S.opv:0;
+  S.revPerDisch=S.ipd? S.revIP/S.ipd:0;
+  S.occ=(E&&E.bedCap)? E.occDays/E.bedCap*100:null;
+  S.arpob=(E&&E.occDays)? S.rev/E.occDays/1000:null;
+  S.alos=(E&&E.alos)||null;
+  S.conv=S.rev? S.coll/S.rev*100:null;
+  // halves
+  const h=Math.ceil(n/2);
+  const f=R.slice(0,h), b=R.slice(h);
+  S.h1=f.length? sum(f,'revTot')/f.length:0;
+  S.h2=b.length? sum(b,'revTot')/b.length:0;
+  S.h1n=f.length; S.h2n=b.length;
+  // doctor / department aggregates
+  S.docs={}; S.depts={}; S.adm=0;
+  if(H&&H.doctors){
+   Object.entries(H.doctors).forEach(([nm,v])=>{
+    S.docs[nm]={rev:v.rev||0,dept:v.dept||'',opv:v.opv||0,adm:v.adm||0,dis:v.dis||0};
+    S.adm+=(v.adm||0);
+    const d=v.dept||'Unallocated';
+    S.depts[d]=(S.depts[d]||0)+(v.rev||0);
+   });
+  }
+  S.docRev=Object.values(S.docs).reduce((a,d)=>a+d.rev,0);
+  S.admPerDay=S.adm/n;
+  return S;
+ }
+ const A=stats(tgt), B=stats(base), Lv=stats(live);
+ window.__closedMonth=A.label;   // consumed by the AOP-tracker plan-phasing note
+
+ // ---- headline framing ---------------------------------------------------
+ const dHead=B? pct(A.perDay,B.perDay):0;                 // per calendar day
+ const dWork=(B&&B.wkPerDay)? pct(A.wkPerDay,B.wkPerDay):0; // ex-Sun/holiday
+ const dBud=pct(A.rev,A.bud);
+ const nwA=A.sundays+A.hols.length, nwB=B? B.sundays+B.hols.length:0;
+ const up=dHead>=0;
+ document.getElementById('vznTitle').textContent=
+   B? ('Why '+A.label+' came in '+(up?'ahead of ':'behind ')+B.label)
+     : (A.label+' — month in review');
+
+ // how much of the headline gap the calendar explains
+ let calShare=null;
+ if(B&&Math.abs(dHead)>0.5&&Math.abs(dHead)>Math.abs(dWork))
+   calShare=Math.min(100,Math.max(0,(1-dWork/dHead)*100));
+
+ const holTxt=A.hols.length? (' plus '+A.hols.join(' and ')):'';
+ const nwPhrase=nwA+' non-working day'+(nwA===1?'':'s')+' ('+A.sundays+
+   ' Sunday'+(A.sundays===1?'':'s')+holTxt+')';
+ let note='Generated from the data on every build — '+A.label+
+   ' is closed at '+A.n+' of '+dim(tgt)+' days'+
+   (B? ', compared against '+B.label+(B.complete?'':' ('+B.n+' days of data only)'):'')+'. ';
+ if(B){
+  note+='Calendar mix: '+A.label+' carries <b>'+nwPhrase+'</b> against '+nwB+' in '+B.label+
+   (calShare!=null? ', which accounts for roughly '+calShare.toFixed(0)+'% of the headline gap':'')+
+   '. The ex-Sunday, ex-holiday run-rate moved <b>'+sgn(dWork)+'%</b>. ';
+  note+='Within '+A.label+', days 1–'+A.h1n+' ran at '+fLd(A.h1/L)+'/day against '+
+   fLd(A.h2/L)+'/day over days '+(A.h1n+1)+'–'+A.n+
+   ' ('+sgn(pct(A.h2,A.h1))+'%), where '+B.label+' went '+fLd(B.h1/L)+' → '+fLd(B.h2/L)+'.';
+ }
+ document.getElementById('vznNote').innerHTML=note;
+
+ // ---- stat strip ---------------------------------------------------------
+ const st=(l,v,s,c)=>'<div class="vstat"><div class="vlbl">'+l+'</div><div class="vval '+
+   (c||'')+'">'+v+'</div><div class="vsub">'+s+'</div></div>';
+ document.getElementById('vznStrip').innerHTML=
+  (B? st('Run-rate vs full '+B.label,sgn(dHead)+'%',
+      fLd(B.perDay/L)+'/day → '+fLd(A.perDay/L)+'/day ('+
+      (A.perDay>=B.perDay?'+':'−')+fLd(Math.abs(A.perDay-B.perDay)/L)+'/day)',
+      cls(dHead)):'')+
+  (B? st('Ex-Sunday / holiday run-rate',sgn(dWork)+'%',
+      fLd(B.wkPerDay/L)+' → '+fLd(A.wkPerDay/L)+'/day across '+A.wkDays+' working days',
+      cls(dWork)):'')+
+  st(A.label+' vs budget',sgn(dBud)+'%',
+     fmtCr(A.rev)+' vs '+fmtCr(A.bud)+' ('+(A.rev>=A.bud?'+':'−')+
+     fmtCr(Math.abs(A.rev-A.bud))+')',cls(dBud))+
+  (A.conv!=null? st('Cash conversion',A.conv.toFixed(0)+'%',
+     fmtCr(A.coll)+' collected on '+fmtCr(A.rev)+' gross'+
+     (B&&B.conv!=null? ' · '+B.label+' '+B.conv.toFixed(0)+'%':''),
+     (B&&B.conv!=null)?cls(A.conv-B.conv):''):'');
+
+ // ---- box 1: rate vs volume ---------------------------------------------
+ const rows=[
+  ['OP revenue per visit', A.revPerOpv, B&&B.revPerOpv, v=>'₹'+iN(v), 0, 0],
+  ['ARPOB (₹’000/bed-day)', A.arpob, B&&B.arpob, v=>v.toFixed(1), 0, 0],
+  ['IP revenue per discharge', A.revPerDisch, B&&B.revPerDisch, v=>fL(v/L), 0, 0],
+  ['ALOS (days)', A.alos, B&&B.alos, v=>v.toFixed(2), 0, 0],
+  ['OP visits / day', A.opvPerDay, B&&B.opvPerDay, v=>iN(v), 1, 0],
+  ['Bed occupancy', A.occ, B&&B.occ, v=>v.toFixed(1)+'%', 1, 1],
+  ['IP discharges / day', A.ipdPerDay, B&&B.ipdPerDay, v=>v.toFixed(1), 1, 0],
+  ['Admissions / day', A.admPerDay, B&&B.admPerDay, v=>v.toFixed(1), 1, 0]
+ ].filter(r=>r[1]!=null&&isFinite(r[1]));
+ const firstVol=rows.find(x=>x[4]===1);
+
+ let tb='';
+ rows.forEach(r=>{
+  const [lbl,a,b,f,isVol,pts]=r;
+  const has=(b!=null&&isFinite(b)&&b!==0);
+  const dp=has? pct(a,b):null;
+  const dCell=!has? '—'
+    : pts? ((a>=b?'+':'−')+Math.abs(a-b).toFixed(1)+' pts')
+    : ((a>=b?'+':'−')+f(Math.abs(a-b)));
+  tb+='<tr'+(r===firstVol?' class="sep"':'')+'><td>'+lbl+'</td>'+
+   '<td class="r">'+(has?f(b):'—')+'</td><td class="r">'+f(a)+'</td>'+
+   '<td class="r '+(has?cls(dp):'')+'">'+dCell+'</td>'+
+   '<td class="r '+(has?cls(dp):'')+'">'+(has?sgn(dp)+'%':'—')+'</td></tr>';
+ });
+
+ // classify: rate move vs volume move
+ const rateD=[A.revPerOpv&&B&&pct(A.revPerOpv,B.revPerOpv),
+              A.arpob&&B&&B.arpob&&pct(A.arpob,B.arpob),
+              A.revPerDisch&&B&&pct(A.revPerDisch,B.revPerDisch)].filter(v=>typeof v==='number'&&isFinite(v));
+ const volD=[B&&pct(A.opvPerDay,B.opvPerDay),
+             (A.occ&&B&&B.occ)&&pct(A.occ,B.occ),
+             B&&pct(A.ipdPerDay,B.ipdPerDay)].filter(v=>typeof v==='number'&&isFinite(v));
+ const avg=a=>a.length? a.reduce((x,y)=>x+y,0)/a.length:0;
+ const rAvg=avg(rateD), vAvg=avg(volD);
+ let diag;
+ if(!B) diag='No prior month with data is available for comparison.';
+ else if(Math.abs(rAvg)<3&&Math.abs(vAvg)>=4)
+   diag='<b>'+(vAvg<0?'Volume, not price.':'Volume-led, not price-led.')+'</b> Realization is holding — the rate '+
+     'measures moved '+sgn(rAvg)+'% on average — while the volume measures moved '+sgn(vAvg)+
+     '%. Essentially the entire movement is '+(vAvg<0?'fewer visits, fewer discharges and a lighter census':
+     'more visits, more discharges and a fuller census')+'.';
+ else if(Math.abs(rAvg)>=3&&Math.abs(vAvg)<3)
+   diag='<b>Rate and mix, not volume.</b> Throughput is broadly flat (volume measures '+sgn(vAvg)+
+     '% on average) while realization moved '+sgn(rAvg)+'% — this is a pricing, payer-mix or case-mix shift.';
+ else if(Math.abs(rAvg)>=3&&Math.abs(vAvg)>=3)
+   diag='<b>Rate and volume moved together</b> — realization '+sgn(rAvg)+'%, volume '+sgn(vAvg)+
+     '%. Both need reading before attributing the gap to either.';
+ else diag='<b>Broadly stable month.</b> Realization moved '+sgn(rAvg)+'% and volume '+sgn(vAvg)+
+     '% — neither is a material driver at this scale.';
+
+ const lineTxt=B? ('OP '+sgn(pct(A.opPerDay,B.opPerDay))+'%, IP '+sgn(pct(A.ipPerDay,B.ipPerDay))+
+   '%, Pharmacy '+sgn(pct(A.phPerDay,B.phPerDay))+'% per day'):'';
+ const allSame=B&&[pct(A.opPerDay,B.opPerDay),pct(A.ipPerDay,B.ipPerDay),pct(A.phPerDay,B.phPerDay)]
+   .every(v=>Math.sign(v)===Math.sign(dHead));
+ let foot=B? ('Revenue lines: '+lineTxt+
+   (allSame? ' — all three moved in the same direction, the signature of a throughput shift rather than a mix or rate shift.'
+           : ' — the lines diverge, so this is a mix shift rather than a uniform throughput move.')):'';
+ if(A.conv!=null&&B&&B.conv!=null&&Math.abs(A.conv-B.conv)>=3)
+   foot+=' <b>Watch collections:</b> cash conversion '+(A.conv<B.conv?'slipped':'improved')+' to '+
+     A.conv.toFixed(0)+'% of gross from '+B.conv.toFixed(0)+'% in '+B.label+'.';
+
+ let boxes='<div class="vbox"><h3>1 &middot; '+
+   (Math.abs(rAvg)<3&&Math.abs(vAvg)>=4? 'It is volume and census, not price':'Rate versus volume')+'</h3>'+
+   '<p>'+diag+'</p>'+
+   '<table class="vtab"><thead><tr><th>Measure</th><th class="r">'+(B?B.label:'—')+
+   '</th><th class="r">'+A.label+'</th><th class="r">&Delta;</th><th class="r">&Delta;%</th></tr></thead><tbody>'+
+   tb+'</tbody></table>'+(foot?'<p class="vfoot">'+foot+'</p>':'')+'</div>';
+
+ // ---- box 2: departments -------------------------------------------------
+ function movers(aMap,bMap,nA,nB){
+  const names=new Set([...Object.keys(aMap),...Object.keys(bMap||{})]);
+  const out=[];
+  names.forEach(k=>{
+   const a=(aMap[k]||0)/nA/L, b=((bMap||{})[k]||0)/nB/L;
+   if(a<0.10&&b<0.10) return;
+   out.push({k,a,b,d:a-b,p:b? (a/b-1)*100:null});
+  });
+  return out.sort((x,y)=>x.d-y.d);
+ }
+ if(B&&Object.keys(A.depts).length&&Object.keys(B.depts).length){
+  const mv=movers(A.depts,B.depts,A.n,B.n);
+  const dec=mv.filter(m=>m.d<0), gai=mv.filter(m=>m.d>0).sort((x,y)=>y.d-x.d);
+  const decTot=dec.reduce((s,m)=>s+m.d,0), gaiTot=gai.reduce((s,m)=>s+m.d,0);
+  const net=decTot+gaiTot;
+  const top2=dec.slice(0,2).reduce((s,m)=>s+m.d,0);
+  const top2Share=net? Math.abs(top2/net)*100:null;
+  const row=m=>'<tr><td>'+nmT(m.k)+'</td><td class="r">'+m.b.toFixed(2)+'</td><td class="r">'+
+    m.a.toFixed(2)+'</td><td class="r '+(m.d>=0?'good':'bad')+'">'+(m.d>=0?'+':'−')+
+    Math.abs(m.d).toFixed(2)+'</td><td class="r '+(m.d>=0?'good':'bad')+'">'+
+    (m.p==null?'—':sgn(m.p)+'%')+'</td></tr>';
+  const ratio=gaiTot? Math.abs(decTot/gaiTot):null;
+  boxes+='<div class="vbox"><h3>2 &middot; '+
+   (top2Share!=null&&top2Share>=50? 'The gap is concentrated':'The gap is broad-based')+'</h3>'+
+   '<p>Declines total <b>'+fLd(Math.abs(decTot))+'/day</b> against <b>'+fLd(gaiTot)+'/day</b> of gains'+
+   (ratio!=null? ' (a '+ratio.toFixed(0)+':1 ratio)':'')+'. The two largest decliners are '+
+   (top2Share!=null? '<b>'+top2Share.toFixed(0)+'% of the net movement</b>':'listed first')+
+   '. '+dec.length+' departments fell and '+gai.length+' rose.</p>'+
+   '<table class="vtab"><thead><tr><th>Department</th><th class="r">'+B.label.slice(0,3)+
+   ' ₹L/d</th><th class="r">'+A.label.slice(0,3)+' ₹L/d</th><th class="r">&Delta; ₹L/d</th>'+
+   '<th class="r">&Delta;%</th></tr></thead><tbody>'+
+   dec.slice(0,10).map(row).join('')+
+   (gai.length? '<tr class="sep">'+row(gai[0]).slice(4):'')+
+   gai.slice(1,4).map(row).join('')+
+   '</tbody></table>'+
+   '<p class="vfoot">Doctor-attributed revenue from the Daily MIS doctor sheets, aggregated to '+
+   'department and averaged per calendar day; covers '+(A.docRev/A.rev*100).toFixed(1)+
+   '% of gross revenue in '+A.label+'. Departments below ₹0.10 L/day in both months are omitted.</p></div>';
+
+  // ---- box 3: doctors ---------------------------------------------------
+  const dm={}; Object.entries(A.docs).forEach(([k,v])=>dm[k]=v.rev);
+  const bm={}; Object.entries(B.docs).forEach(([k,v])=>bm[k]=v.rev);
+  const dv2=movers(dm,bm,A.n,B.n);
+  const ddec=dv2.filter(m=>m.d<0), dgai=dv2.filter(m=>m.d>0).sort((x,y)=>y.d-x.d);
+  const drow=m=>{const dp=A.docs[m.k]||B.docs[m.k]||{};
+   return '<tr><td class="doc">'+nmT(m.k)+'</td><td class="doc">'+nmT(dp.dept||'—')+
+    '</td><td class="r">'+m.b.toFixed(2)+'</td><td class="r">'+m.a.toFixed(2)+
+    '</td><td class="r '+(m.d>=0?'good':'bad')+'">'+(m.d>=0?'+':'−')+Math.abs(m.d).toFixed(2)+
+    '</td><td class="r '+(m.d>=0?'good':'bad')+'">'+(m.p==null?'—':sgn(m.p)+'%')+'</td></tr>';};
+  const top2d=ddec.slice(0,2), gain6=dgai.slice(0,6);
+  const t2=Math.abs(top2d.reduce((s,m)=>s+m.d,0)), g6=gain6.reduce((s,m)=>s+m.d,0);
+  // volume-vs-rate read on the two biggest decliners
+  const vr=top2d.map(m=>{
+   const a=A.docs[m.k]||{}, b=B.docs[m.k]||{};
+   const oa=(a.opv||0)/A.n, ob=(b.opv||0)/B.n, da=(a.dis||0)/A.n, db=(b.dis||0)/B.n;
+   const bits=[];
+   if(ob>0.2) bits.push('OP visits '+iN(b.opv)+' → '+iN(a.opv)+' ('+sgn(pct(oa,ob))+'%)');
+   if(db>0.2) bits.push('discharges '+iN(b.dis)+' → '+iN(a.dis)+' ('+sgn(pct(da,db))+'%)');
+   return bits.length? '<b>'+nmT(m.k)+'</b> '+bits.join(', '):null;
+  }).filter(Boolean);
+  boxes+='<div class="vbox"><h3>3 &middot; Doctor-level movers</h3>'+
+   '<p>The two largest decliners account for <b>'+fLd(t2)+'/day</b> between them, while the six '+
+   'largest gainers add back <b>'+fLd(g6)+'/day</b>'+
+   (t2>g6*1.5? ' — no offsetting cluster large enough to close the gap.':
+    g6>t2? ' — the gainers more than offset the decliners.':' — broadly offsetting.')+'</p>'+
+   '<table class="vtab"><thead><tr><th>Consultant</th><th>Department</th><th class="r">'+
+   B.label.slice(0,3)+' ₹L/d</th><th class="r">'+A.label.slice(0,3)+' ₹L/d</th>'+
+   '<th class="r">&Delta; ₹L/d</th><th class="r">&Delta;%</th></tr></thead><tbody>'+
+   ddec.slice(0,9).map(drow).join('')+
+   (dgai.length? '<tr class="sep">'+drow(dgai[0]).slice(4):'')+
+   dgai.slice(1,6).map(drow).join('')+
+   '</tbody></table>'+
+   (vr.length? '<p class="vfoot">Volume vs rate on the two largest declines: '+vr.join('; ')+
+     '. Books below ₹0.10 L/day in both months are omitted.</p>':'')+'</div>';
+
+  // ---- box 4: generated read --------------------------------------------
+  let read='<div class="vbox read"><h3>4 &middot; The read</h3>';
+  read+='<p><b>'+A.label+' closed at '+fmtCr(A.rev)+' against '+fmtCr(A.bud)+' of budget, '+
+   sgn(dBud)+'%'+(dBud<0?' short':' ahead')+'.</b> Per calendar day the month ran '+sgn(dHead)+
+   '% against '+B.label+
+   (calShare!=null? ', of which roughly '+calShare.toFixed(0)+'% is calendar — '+nwA+
+     ' non-working days against '+nwB+' — leaving '+sgn(dWork)+
+     '% as underlying weekday movement.':'; the ex-Sunday, ex-holiday run-rate moved '+sgn(dWork)+'%.')+'</p>';
+  read+='<p>'+diag.replace(/<\/?b>/g,'')+' '+
+   (allSame? 'All three revenue lines moved together ('+lineTxt+'), which points to throughput rather than mix.'
+           : 'The revenue lines diverged ('+lineTxt+'), which points to mix rather than throughput.')+' '+
+   (top2Share!=null&&top2Share>=50
+     ? 'The movement is concentrated: the top two departments are '+top2Share.toFixed(0)+
+       '% of the net change, so this reads as a small number of books rather than a system-wide shift.'
+     : 'The movement is broad-based: '+dec.length+' departments fell against '+gai.length+
+       ' that rose, and the top two are only '+(top2Share!=null?top2Share.toFixed(0):'—')+
+       '% of the net change — that argues against a consultant-availability explanation and towards a demand or funnel issue.')+'</p>';
+  // generated action list, keyed off what actually moved
+  const acts=[];
+  if(B&&pct(A.opvPerDay,B.opvPerDay)<-4&&Math.abs(pct(A.revPerOpv,B.revPerOpv))<3)
+   acts.push('the OP funnel — split the '+sgn(A.opvPerDay-B.opvPerDay)+
+     ' visits/day into walk-in vs referral vs follow-up, since flat realization points squarely here');
+  if(ddec.length) acts.push(nmT(ddec[0].k)+'’s book, which alone is '+fLd(Math.abs(ddec[0].d))+
+     '/day of the movement');
+  if(A.occ&&B&&B.occ&&pct(A.occ,B.occ)<-4)
+   acts.push('bed and OT utilisation — occupancy moved '+sgn(A.occ-B.occ)+
+     ' points to '+A.occ.toFixed(1)+'%');
+  if(B&&pct(A.ipdPerDay,B.ipdPerDay)<-4)
+   acts.push('admission and discharge slots — discharges '+sgn(pct(A.ipdPerDay,B.ipdPerDay))+'% per day');
+  if(A.conv!=null&&B&&B.conv!=null&&A.conv<B.conv-3)
+   acts.push('the collections slip to '+A.conv.toFixed(0)+
+     '% cash conversion, which may be a billing-cycle artefact but is worth confirming before close');
+  if(acts.length) read+='<p><b>What to test first:</b> '+
+   acts.map((a,i)=>'('+(i+1)+') '+a).join('; ')+'.</p>';
+  // live-month caveat
+  if(Lv) read+='<p class="vwarn">'+Lv.label+' is '+Lv.n+' day'+(Lv.n===1?'':'s')+
+   ' in at '+fLd(Lv.perDay/L)+'/day against '+fLd(Lv.bud/Lv.n/L)+'/day of budget ('+
+   sgn(pct(Lv.rev,Lv.bud))+'%)'+
+   ((Lv.wkDays===Lv.n)
+     ? ' — all working days so far, so against '+A.label+'\u2019s ex-Sunday, ex-holiday '+
+       fLd(A.wkPerDay/L)+'/day that is '+sgn(pct(Lv.wkPerDay,A.wkPerDay))+'%'
+     : '; on the comparable ex-Sunday, ex-holiday basis '+fLd(Lv.wkPerDay/L)+'/day against '+
+       A.label+'\u2019s '+fLd(A.wkPerDay/L)+'/day ('+sgn(pct(Lv.wkPerDay,A.wkPerDay))+'%)')+
+   '. At this few days the department and consultant '+
+   'splits above are not yet meaningful for '+Lv.label+
+   ' — the panel rolls forward to it once the month closes.</p>';
+  read+='</div>';
+  boxes+=read;
+ }
+ document.getElementById('vznGrid').innerHTML=boxes;
+
+ // ---- compact live-month strip above the panel --------------------------
+ if(Lv){
+  const lp=pct(Lv.rev,Lv.bud);
+  document.getElementById('mtdStrip').innerHTML=
+   '<div class="panel vzn" style="padding-bottom:6px">'+
+   '<h2>'+Lv.label+' month-to-date — '+Lv.n+' of '+dim(Lv.mk)+' days</h2>'+
+   '<div class="note">Live tracker. The variance panel below analyses the last closed month, '+
+   'which is where the department and consultant detail is statistically readable.</div>'+
+   '<div class="vstrip">'+
+    st('MTD revenue',fmtCr(Lv.rev),'vs '+fmtCr(Lv.bud)+' budget · '+sgn(lp)+'%',cls(lp))+
+    st('Working-day run-rate',fLd(Lv.wkPerDay/L)+'/day',
+      A? (A.label+' '+fLd(A.wkPerDay/L)+'/day · '+sgn(pct(Lv.wkPerDay,A.wkPerDay))+
+         '% · ex-Sunday, ex-holiday'):'',A?cls(pct(Lv.wkPerDay,A.wkPerDay)):'')+
+    st('OP visits / working day',iN(Lv.wkOpvPerDay),
+      A? (A.label+' '+iN(A.wkOpvPerDay)+' · '+sgn(pct(Lv.wkOpvPerDay,A.wkOpvPerDay))+'%'):'',
+      A?cls(pct(Lv.wkOpvPerDay,A.wkOpvPerDay)):'')+
+    st('Cash conversion',(Lv.conv||0).toFixed(0)+'%',fmtCr(Lv.coll)+' collected',
+      A&&A.conv?cls((Lv.conv||0)-A.conv):'')+
+   '</div></div>';
+ }
+})();
 
 // daily chart
 const dailyKeys=Object.keys(D.daily).sort();
@@ -2057,19 +2352,50 @@ function drawProj(){
    st('FY27 plan',fmtCr(fyPlan||0),'FY26 actual '+fmtCr(rev.fy26Act||0)+' · +'+
       ((rev.fy26Act&&fyPlan)?((fyPlan/rev.fy26Act-1)*100).toFixed(0):'—')+'%');
 
-  // dual August plan note
-  const augIdx=ch.labels.indexOf('Aug');
+  // dual monthly plan note — pinned to the latest month the tracker actually carries
+  const M3={Apr:'April',May:'May',Jun:'June',Jul:'July',Aug:'August',Sep:'September',
+    Oct:'October',Nov:'November',Dec:'December',Jan:'January',Feb:'February',Mar:'March'};
+  const want=window.__closedMonth||null;   // the month the rest of the dashboard reports on
+  let augIdx=want? ch.labels.findIndex(l=>M3[l]===want) : -1;
+  if(augIdx<0||!nn((ch.revenue[augIdx]||{}).plan))
+    augIdx=(function(){for(let i=ch.labels.length-1;i>=0;i--){
+      const r=ch.revenue[i]; if(r&&nn(r.plan)&&nn(r.act)&&r.act>0) return i;} return -1;})();
   const trkAug=augIdx>=0? ch.revenue[augIdx].plan : null;
-  const aopAug=(D.aop&&D.aop.months)? (D.aop.months.find(m=>m.month==='August')||{}).total : null;
+  const augLbl=augIdx>=0? ch.labels[augIdx] : '—';
+  const augFull=M3[augLbl]||augLbl;
+  const aopAug=(D.aop&&D.aop.months)? (D.aop.months.find(m=>m.month===augFull)||{}).total : null;
+  document.getElementById('trkAugMon').textContent=augFull;
+  // Which phasing do the daily budget lines actually follow? Decide it from the
+  // data rather than asserting it — the two plans differ by month.
+  const dailyBudMon=(function(){
+    const mi=Object.keys(D.daily).find(k=>{
+      const [y,m]=k.split('-').map(Number);
+      return ({April:4,May:5,June:6,July:7,August:8,September:9,October:10,
+               November:11,December:12,January:1,February:2,March:3})[augFull]===m;});
+    return mi? D.daily[mi].reduce((a,r)=>a+(r.budTot||0),0):null;})();
+  const near=(a,b)=>nn(a)&&nn(b)&&Math.abs(a-b)<Math.max(1e5,Math.abs(b)*0.002);
+  let tiesTo=null;
+  if(near(dailyBudMon,trkAug)&&!near(dailyBudMon,aopAug)) tiesTo='tracker';
+  else if(near(dailyBudMon,aopAug)&&!near(dailyBudMon,trkAug)) tiesTo='aop';
   document.getElementById('trkAugNote').innerHTML=
-   'The daily budget lines on the <b>Daily operations</b> tab use the AOP monthly phasing, which puts '+
-   'August at <b>'+(nn(aopAug)?fmtCr(aopAug):'—')+'</b>. This tracker phases the same annual plan slightly '+
-   'differently and puts August at <b>'+(nn(trkAug)?fmtCr(trkAug):'—')+'</b>'+
-   ((nn(trkAug)&&nn(aopAug))? ' &mdash; a difference of '+fmtCr(trkAug-aopAug)+' ('+
-     ((trkAug/aopAug-1)*100).toFixed(1)+'%)':'')+'. '+
-   'The annual totals are identical; only the month-by-month split differs. '+
-   '<b>The AOP figure remains the governing budget</b> everywhere else on this dashboard, so published '+
-   'achievement percentages are unchanged; the tracker figure is shown here for reference only.';
+   'The same annual plan is phased two ways. The AOP monthly phasing puts '+augFull+' at <b>'+
+   (nn(aopAug)?fmtCr(aopAug):'—')+'</b>; this tracker puts it at <b>'+
+   (nn(trkAug)?fmtCr(trkAug):'—')+'</b>'+
+   ((nn(trkAug)&&nn(aopAug))? ' &mdash; a difference of '+fmtCr(Math.abs(trkAug-aopAug))+' ('+
+     (Math.abs(trkAug/aopAug-1)*100).toFixed(1)+'%)':'')+
+   '. The annual totals are identical; only the month-by-month split differs. '+
+   (nn(dailyBudMon)
+     ? 'The daily budget lines on the <b>Daily operations</b> tab sum to <b>'+fmtCr(dailyBudMon)+
+       '</b> for '+augFull+
+       (tiesTo==='tracker'
+         ? ', which ties to the <b>tracker phasing</b> &mdash; so the achievement percentages '+
+           'shown elsewhere on this dashboard are measured against that split, not the AOP one.'
+         : tiesTo==='aop'
+         ? ', which ties to the <b>AOP phasing</b> &mdash; so the achievement percentages shown '+
+           'elsewhere on this dashboard are measured against the AOP split.'
+         : ', which matches neither phasing exactly; treat the achievement percentages as '+
+           'indicative for this month and confirm the budget source with Finance.')
+     : 'No daily budget series is available for '+augFull+' to reconcile against.');
 
   renderTrkPl(); renderTrkInit(); drawTrkEb();
  }
