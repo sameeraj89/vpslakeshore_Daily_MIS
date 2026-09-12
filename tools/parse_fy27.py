@@ -403,11 +403,15 @@ def collect(mis_folder, tools_dir, verbose=True):
     result = {"units": {}, "monthly": {}, "source": {}}
 
     # --- BRM deck: newest matching file ---
-    brms = sorted(glob.glob(os.path.join(fy, "*BRM_Deck_FY 27*Treating Report basis*.xlsx")),
+    # Newest deck wins regardless of variant, so a fresh month's deck is picked up
+    # as soon as it lands. BRM_PREFER=treating pins the old "Treating Report basis"
+    # behaviour if the two ever need comparing side by side.
+    brms = sorted([p for p in glob.glob(os.path.join(fy, "*BRM_Deck_FY 27*.xlsx"))
+                   if not os.path.basename(p).startswith("~$")],
                   key=lambda p: os.stat(p).st_mtime, reverse=True)
-    if not brms:
-        brms = sorted(glob.glob(os.path.join(fy, "*BRM_Deck_FY 27*.xlsx")),
-                      key=lambda p: os.stat(p).st_mtime, reverse=True)
+    if os.environ.get("BRM_PREFER") == "treating":
+        _pref = [p for p in brms if "Treating Report basis" in os.path.basename(p)]
+        if _pref: brms = _pref
     if brms:
         bp = brms[0]
         k = "brm|" + _sig(bp)

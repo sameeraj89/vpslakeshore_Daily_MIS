@@ -287,6 +287,52 @@ def find_aop(folder):
         d = os.path.dirname(d)
     return None
 
+MOM_REV_GLOB = "LHRC_MoM_Revenue_*.xlsx"
+
+def find_mom_revenue(folder):
+    """Candidate MoM revenue workbooks beside the Daily MIS Reports folder.
+
+    Returns every match, newest first — the folder also holds YoY-overlay
+    workbooks with a different layout, so the caller tries each until one parses.
+    """
+    env = os.environ.get("MOM_REV_PATH")
+    if env is not None:
+        return [env] if (env and os.path.exists(env)) else []
+    out, d = [], os.path.abspath(folder)
+    for _ in range(3):
+        out += [p for p in glob.glob(os.path.join(d, MOM_REV_GLOB))
+                if not os.path.basename(p).startswith("~$")]
+        d = os.path.dirname(d)
+    return sorted(set(out), key=lambda p: os.stat(p).st_mtime, reverse=True)
+
+def parse_mom_revenue(path):
+    """Three-fiscal-year monthly gross revenue.
+
+    Sheet 'MoM Revenue': FY | Month | IP | OP | F&B | Calicut OP | Total (Rs L) |
+    Total (Rs Cr). Same basis as the flash YEAR sheet, so it ties to the rest of
+    the dashboard. Returns {'source','fys':[...],'months':{FY:{'Apr':Cr,...}}}.
+    """
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+    out, order, stop = {}, [], False
+    for r in rows:
+        a = str(r[0] or "").strip()
+        if a.lower().startswith("fiscal-year totals"): stop = True
+        if stop or not re.match(r"^FY\d\d-\d\d$", a): continue
+        mon = str(r[1] or "").strip()          # e.g. "Apr-24"
+        if "-" not in mon: continue
+        cr = r[7] if len(r) > 7 else None
+        if cr is None and len(r) > 6 and r[6] is not None:
+            try: cr = float(r[6]) / 100.0
+            except Exception: cr = None
+        if cr is None: continue
+        if a not in out: out[a] = {}; order.append(a)
+        out[a][mon.split("-")[0]] = round(float(cr), 2)
+    if not out: return None
+    return {"source": os.path.basename(path), "fys": order, "months": out}
+
 def parse_aop(path):
     """'Monthly P&L' -> {'source','fyPlan','fy26Actual','months':[{month,ip,op,fnb,other,total}]}
     Row labels in col A; Apr-26..Mar-27 in cols D..O (3..14); col 1 = FY26 actual,
@@ -456,7 +502,9 @@ def main():
     for mkey, (d, f) in sorted(mis_month_files.items(), reverse=True):
         sig = "%s|%d" % (os.path.basename(f), int(os.path.getmtime(f)))
         cached = mis_cache.get(mkey)
-        if cached and cached.get("src") == sig and history.get(mkey, {}).get("doctors"):
+        if (cached and cached.get("src") == sig
+                and history.get(mkey, {}).get("doctors")
+                and history.get(mkey, {}).get("docDailyVol") is not None):
             mom_fy.update(cached.get("mom") or {})
             continue
         if mis_budget and (time.time() - _t_mis) > mis_budget:
@@ -467,7 +515,7 @@ def main():
         w = openpyxl.load_workbook(f, read_only=True, data_only=True)
         sheets = {norm(s): s for s in w.sheetnames}
         def get(name): return w[sheets[norm(name)]] if norm(name) in sheets else None
-        docs, doc_daily = {}, {}
+        docs, doc_daily, vol_daily = {}, {}, {}
         pairs = [("Doc wise revenue date conso.", "rev"), ("Patient visits", "opv"),
                  ("No. Admissions", "adm"), ("No. discharges", "dis")]
         for sn, field in pairs:
@@ -475,6 +523,7 @@ def main():
             if ws is None: continue
             totals, per_day = parse_doctor_day_matrix(ws, field)
             if field == "rev": doc_daily = per_day
+            else: vol_daily[field] = per_day
             for (dept, doc), val in totals.items():
                 rec = docs.setdefault(doc, {"dept": dept, "rev": 0, "opv": 0, "adm": 0, "dis": 0})
                 if dept: rec["dept"] = dept
@@ -488,7 +537,13 @@ def main():
                          "daysElapsed": d.day,
                          "doctors": {k: v for k, v in docs.items() if any(v[f] for f in ("rev","opv","adm","dis"))},
                          "docDaily": {k: {str(day): round(v, 0) for day, v in dd.items()}
-                                      for k, dd in doc_daily.items() if dd}}
+                                      for k, dd in doc_daily.items() if dd},
+                         # per-doctor daily volumes, so a part-month window can be
+                         # compared against the same days of an earlier month without
+                         # pro-rating whole-month totals
+                         "docDailyVol": {f: {k: {str(day): int(round(v)) for day, v in dd.items() if v}
+                                             for k, dd in (vol_daily.get(f) or {}).items() if dd}
+                                         for f in ("opv", "adm", "dis")}}
     json.dump(history, open(hist_path, "w"))
     json.dump(mis_cache, open(mis_cache_path, "w"))
     print("History months:", sorted(history), "| MIS deferred:", mis_deferred, flush=True)
@@ -522,6 +577,29 @@ def main():
         except Exception: aop = None
     if not aop: print("WARNING: no FY27 AOP available; projection tab will hide plan columns")
 
+    # ---- three-FY monthly revenue (FY24-25 / FY25-26 / FY26-27) ----
+    mom_rev_cache = os.path.join(tools, "mom_revenue.json")
+    mom_rev = None
+    for mrp in find_mom_revenue(folder):
+        try:
+            cand = parse_mom_revenue(mrp)
+        except Exception as e:
+            print("MoM revenue parse failed for %s: %s" % (os.path.basename(mrp), e))
+            continue
+        # needs at least two fiscal years of months to be the right workbook
+        if cand and len(cand["fys"]) >= 2:
+            mom_rev = cand
+            json.dump(mom_rev, open(mom_rev_cache, "w"))
+            print("MoM revenue from %s | %s" %
+                  (os.path.basename(mrp),
+                   ", ".join("%s %d mo" % (k, len(v)) for k, v in mom_rev["months"].items())))
+            break
+    if not mom_rev and os.path.exists(mom_rev_cache):
+        try:
+            mom_rev = json.load(open(mom_rev_cache)); print("MoM revenue from cache")
+        except Exception: mom_rev = None
+    if not mom_rev: print("WARNING: no MoM revenue workbook; three-FY tracker will hide")
+
     # ---- FY27 monthly financials (BRM deck actuals + MIS pack P&L, both units) ----
     fy27 = None
     if os.environ.get("SKIP_FY27") != "1":
@@ -550,6 +628,7 @@ def main():
         nDischarges=len(discharges),
         aop=aop,
         fy27=fy27,
+        momRev=mom_rev,
         holidays=HOLIDAYS,
     )
     out = os.path.join(folder, "LHRC_Revenue_Dashboard.html")
@@ -667,6 +746,28 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <div class="vgrid" id="vznGrid"></div>
 </div>
 
+<div class="panel vzn" id="dcPanel" style="display:none">
+<h2 id="dcTitle">Doctor by doctor</h2>
+<div class="note" id="dcNote"></div>
+<div style="margin-bottom:8px">
+<input id="dcFilter" placeholder="Filter doctor / department…" style="padding:5px 10px;border:1px solid #d4dbe3;border-radius:6px;width:250px;font-size:12.5px">
+<label style="font-size:11.5px;color:var(--gray);margin-left:10px"><input type="checkbox" id="dcAll"> show every consultant</label>
+</div>
+<div class="scroll" style="max-height:640px;overflow:auto"><table id="dcTab"><thead></thead><tbody></tbody></table></div>
+<div class="note" id="dcFoot" style="margin-top:8px"></div>
+</div>
+
+<div class="panel" id="momPanel" style="display:none">
+<h2 id="momTitle">Month on Month — Doctors</h2>
+<div class="note" id="momNote"></div>
+<div style="margin-bottom:8px">
+<span id="momBtns"></span>
+<input id="momFilter" placeholder="Filter…" style="padding:5px 10px;border:1px solid #d4dbe3;border-radius:6px;width:220px;font-size:12.5px;margin-left:8px">
+</div>
+<div class="scroll" style="max-height:620px;overflow:auto"><table id="momTab"><thead></thead><tbody></tbody></table></div>
+<div class="note" id="momFoot" style="margin-top:8px"></div>
+</div>
+
 <div class="panel"><h2>Daily Gross Revenue — Actual vs Budget</h2>
 <div class="note">OP / IP / Pharmacy stacked; line = budgeted total.</div>
 <div id="mbtns" style="margin-bottom:8px"></div><canvas id="dailyChart"></canvas></div>
@@ -741,6 +842,19 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 </div>
 
 <div class="wrap view" id="viewProj">
+<div class="panel" id="tfPanel" style="display:none;border-top:3px solid var(--maroon)">
+<h2 id="tfTitle">Total Revenue — three-year view</h2>
+<div class="note" id="tfNote"></div>
+<div class="ctrls" style="margin-bottom:10px">
+ <div class="ctrl"><span class="cl">Growth on unstarted months</span>
+  <input type="range" id="tfG" min="-5" max="40" step="0.5" value="0">
+  <span class="cv" id="tfGVal"></span></div>
+ <div class="ctrl"><span class="cl">Current month</span><span class="cv" id="tfCurBasis"></span></div>
+</div>
+<div class="scroll"><table id="tfTab"><thead></thead><tbody></tbody></table></div>
+<div class="note" id="tfFoot" style="margin-top:8px"></div>
+</div>
+
 <div class="panel" style="border-top:3px solid var(--maroon)">
 <h2>Projection assumptions</h2>
 <div class="note" id="projBasisNote">Closed months are actual. The current month is month-to-date banked revenue plus remaining days at the run-rate. Later months are run-rate &times; calendar days, flexed by the options below.</div>
@@ -1016,24 +1130,39 @@ document.getElementById('cards').innerHTML=
  const iN=v=>Math.round(v).toLocaleString('en-IN');
 
  // ---- pick the months -----------------------------------------------------
+ // The panel reports on the CURRENT month (month-to-date) against a baseline
+ // month, compared over the same calendar days so a part-month never faces a
+ // full one. PREF_BASE is the preferred reference month; it falls back to the
+ // immediately preceding month if that key is not in the data, so nothing
+ // breaks when the fiscal year rolls.
+ const PREF_BASE='2026-07';
  const keys=Object.keys(D.daily).filter(k=>(D.daily[k]||[]).length).sort();
- const closed=keys.filter(k=>D.daily[k].length>=dim(k));
- const tgt=closed[closed.length-1];
- if(!tgt){document.getElementById('vznPanel').style.display='none';return;}
- const base=keys.filter(k=>k<tgt).pop();
- const liveK=keys[keys.length-1];
- const live=(liveK>tgt)? liveK : null;
+ const tgt=keys[keys.length-1];
+ const priors=tgt? keys.filter(k=>k<tgt):[];
+ if(!tgt||!priors.length){document.getElementById('vznPanel').style.display='none';return;}
+ const qsBase=new URLSearchParams(location.search).get('base');
+ const base=(qsBase&&priors.includes(qsBase))? qsBase
+          : (priors.includes(PREF_BASE)? PREF_BASE : priors[priors.length-1]);
+ // matched window: the same day-of-month range in both months
+ const W=Math.min(D.daily[tgt].length, D.daily[base].length);
+ const live=null;   // the target IS the live month now
+ window.__vznWindow={tgt:tgt,base:base,W:W};
 
  // ---- per-month statistics ----------------------------------------------
- function stats(mk){
+ function stats(mk,lim){
   if(!mk) return null;
-  const R=D.daily[mk]||[], H=D.history[mk]||null, E=D.momFY[mk]||null;
+  const Rall=D.daily[mk]||[], H=D.history[mk]||null, E0=D.momFY[mk]||null;
+  const R=(lim&&Rall.length>lim)? Rall.slice(0,lim) : Rall;
   const n=R.length;
+  // census figures are month-level, so scale them to the window when truncated
+  const frac=Rall.length? n/Rall.length : 1;
+  const E=E0? {bedCap:(E0.bedCap||0)*frac, occDays:(E0.occDays||0)*frac, alos:E0.alos} : null;
   const isSun=r=>r.dow==='Sun', isHol=r=>!!HOL[r.date]&&!isSun(r);
   const wk=R.filter(r=>!isSun(r)&&!isHol(r));
   const sum=(a,f)=>a.reduce((s,r)=>s+(+r[f]||0),0);
   const S={mk,n,R,H,E,
     label:mLong(mk),
+    truncated:(Rall.length>n), fullDays:Rall.length,
     complete:n>=dim(mk),
     sundays:R.filter(isSun).length,
     hols:R.filter(isHol).map(r=>HOL[r.date]),
@@ -1061,22 +1190,35 @@ document.getElementById('cards').innerHTML=
   S.h1=f.length? sum(f,'revTot')/f.length:0;
   S.h2=b.length? sum(b,'revTot')/b.length:0;
   S.h1n=f.length; S.h2n=b.length;
-  // doctor / department aggregates
-  S.docs={}; S.depts={}; S.adm=0;
+  // doctor / department aggregates, restricted to the window when truncated
+  S.docs={}; S.depts={}; S.adm=0; S.volExact=true;
   if(H&&H.doctors){
+   const DD=H.docDaily||{}, DV=H.docDailyVol||null;
+   const winSum=(map,nm)=>{const o=(map||{})[nm]; if(!o) return null;
+    let s=0; for(const k in o){ if(+k<=n) s+=o[k]; } return s;};
    Object.entries(H.doctors).forEach(([nm,v])=>{
-    S.docs[nm]={rev:v.rev||0,dept:v.dept||'',opv:v.opv||0,adm:v.adm||0,dis:v.dis||0};
-    S.adm+=(v.adm||0);
+    let rev=v.rev||0, opv=v.opv||0, adm=v.adm||0, dis=v.dis||0;
+    if(S.truncated){
+     const rw=winSum(DD,nm); if(rw!=null) rev=rw;
+     if(DV){ const a=winSum(DV.opv,nm), b=winSum(DV.adm,nm), c=winSum(DV.dis,nm);
+             opv=a||0; adm=b||0; dis=c||0; }
+     else { S.volExact=false; opv*=frac; adm*=frac; dis*=frac; }
+    }
+    S.docs[nm]={rev:rev,dept:v.dept||'',opv:opv,adm:adm,dis:dis};
+    S.adm+=adm;
     const d=v.dept||'Unallocated';
-    S.depts[d]=(S.depts[d]||0)+(v.rev||0);
+    S.depts[d]=(S.depts[d]||0)+rev;
    });
   }
   S.docRev=Object.values(S.docs).reduce((a,d)=>a+d.rev,0);
   S.admPerDay=S.adm/n;
   return S;
  }
- const A=stats(tgt), B=stats(base), Lv=stats(live);
+ const A=stats(tgt,W), B=stats(base,W), Lv=stats(live);
+ const Bfull=stats(base);        // the baseline month in full, for context only
  window.__closedMonth=A.label;   // consumed by the AOP-tracker plan-phasing note
+ window.__vznStats={A:A,B:B,Bfull:Bfull};
+ window.__nmT=nmT; window.__mLong=mLong; window.__dim=dim;
 
  // ---- headline framing ---------------------------------------------------
  const dHead=B? pct(A.perDay,B.perDay):0;                 // per calendar day
@@ -1084,8 +1226,10 @@ document.getElementById('cards').innerHTML=
  const dBud=pct(A.rev,A.bud);
  const nwA=A.sundays+A.hols.length, nwB=B? B.sundays+B.hols.length:0;
  const up=dHead>=0;
+ const dayRange='days 1–'+W;
  document.getElementById('vznTitle').textContent=
-   B? ('Why '+A.label+' came in '+(up?'ahead of ':'behind ')+B.label)
+   B? ('Why '+A.label+' is running '+(up?'ahead of ':'behind ')+B.label+
+       ' — '+dayRange+' of each month')
      : (A.label+' — month in review');
 
  // how much of the headline gap the calendar explains
@@ -1096,26 +1240,39 @@ document.getElementById('cards').innerHTML=
  const holTxt=A.hols.length? (' plus '+A.hols.join(' and ')):'';
  const nwPhrase=nwA+' non-working day'+(nwA===1?'':'s')+' ('+A.sundays+
    ' Sunday'+(A.sundays===1?'':'s')+holTxt+')';
- let note='Generated from the data on every build — '+A.label+
-   ' is closed at '+A.n+' of '+dim(tgt)+' days'+
-   (B? ', compared against '+B.label+(B.complete?'':' ('+B.n+' days of data only)'):'')+'. ';
+ const sel='<label style="font-size:11.5px;color:var(--gray)">Compare against '+
+   '<select id="vznBase" style="padding:3px 7px;border:1px solid #d4dbe3;border-radius:5px;'+
+   'font-size:11.5px;margin-left:4px">'+
+   priors.slice().reverse().map(k=>'<option value="'+k+'"'+(k===base?' selected':'')+'>'+
+     mLong(k)+'</option>').join('')+'</select></label>';
+ let note='<div style="margin-bottom:7px">'+sel+'</div>'+
+   'Generated from the data on every build. '+A.label+' is <b>'+A.n+' of '+dim(tgt)+
+   ' days</b> in, so it is measured against the <b>same '+dayRange+'</b> of '+B.label+
+   ' — not the full month. '+B.label+' in full ran '+fmtCr(Bfull.rev)+' over '+
+   Bfull.n+' days; only '+fmtCr(B.rev)+' of that falls in the matched window. ';
  if(B){
-  note+='Calendar mix: '+A.label+' carries <b>'+nwPhrase+'</b> against '+nwB+' in '+B.label+
+  note+='Calendar mix: '+A.label+' '+dayRange+' carries <b>'+nwPhrase+'</b> against '+nwB+
+   ' in the same days of '+B.label+
    (calShare!=null? ', which accounts for roughly '+calShare.toFixed(0)+'% of the headline gap':'')+
    '. The ex-Sunday, ex-holiday run-rate moved <b>'+sgn(dWork)+'%</b>. ';
-  note+='Within '+A.label+', days 1–'+A.h1n+' ran at '+fLd(A.h1/L)+'/day against '+
+  note+='Within the window, days 1–'+A.h1n+' ran at '+fLd(A.h1/L)+'/day against '+
    fLd(A.h2/L)+'/day over days '+(A.h1n+1)+'–'+A.n+
    ' ('+sgn(pct(A.h2,A.h1))+'%), where '+B.label+' went '+fLd(B.h1/L)+' → '+fLd(B.h2/L)+'.';
+  if(!A.volExact||!B.volExact)
+   note+=' <i>Per-doctor visit and discharge counts for one of the two months are pro-rated '+
+    'from month totals; revenue is exact.</i>';
  }
  document.getElementById('vznNote').innerHTML=note;
+ document.getElementById('vznBase').onchange=function(){
+   const u=new URL(location.href); u.searchParams.set('base',this.value); location.href=u.toString();};
 
  // ---- stat strip ---------------------------------------------------------
  const st=(l,v,s,c)=>'<div class="vstat"><div class="vlbl">'+l+'</div><div class="vval '+
    (c||'')+'">'+v+'</div><div class="vsub">'+s+'</div></div>';
  document.getElementById('vznStrip').innerHTML=
-  (B? st('Run-rate vs full '+B.label,sgn(dHead)+'%',
-      fLd(B.perDay/L)+'/day → '+fLd(A.perDay/L)+'/day ('+
-      (A.perDay>=B.perDay?'+':'−')+fLd(Math.abs(A.perDay-B.perDay)/L)+'/day)',
+  (B? st('Vs '+B.label+' '+dayRange,sgn(dHead)+'%',
+      fmtCr(B.rev)+' → '+fmtCr(A.rev)+' ('+
+      (A.rev>=B.rev?'+':'−')+fmtCr(Math.abs(A.rev-B.rev))+' over '+W+' days)',
       cls(dHead)):'')+
   (B? st('Ex-Sunday / holiday run-rate',sgn(dWork)+'%',
       fLd(B.wkPerDay/L)+' → '+fLd(A.wkPerDay/L)+'/day across '+A.wkDays+' working days',
@@ -1308,41 +1465,36 @@ document.getElementById('cards').innerHTML=
      '% cash conversion, which may be a billing-cycle artefact but is worth confirming before close');
   if(acts.length) read+='<p><b>What to test first:</b> '+
    acts.map((a,i)=>'('+(i+1)+') '+a).join('; ')+'.</p>';
-  // live-month caveat
-  if(Lv) read+='<p class="vwarn">'+Lv.label+' is '+Lv.n+' day'+(Lv.n===1?'':'s')+
-   ' in at '+fLd(Lv.perDay/L)+'/day against '+fLd(Lv.bud/Lv.n/L)+'/day of budget ('+
-   sgn(pct(Lv.rev,Lv.bud))+'%)'+
-   ((Lv.wkDays===Lv.n)
-     ? ' — all working days so far, so against '+A.label+'\u2019s ex-Sunday, ex-holiday '+
-       fLd(A.wkPerDay/L)+'/day that is '+sgn(pct(Lv.wkPerDay,A.wkPerDay))+'%'
-     : '; on the comparable ex-Sunday, ex-holiday basis '+fLd(Lv.wkPerDay/L)+'/day against '+
-       A.label+'\u2019s '+fLd(A.wkPerDay/L)+'/day ('+sgn(pct(Lv.wkPerDay,A.wkPerDay))+'%)')+
-   '. At this few days the department and consultant '+
-   'splits above are not yet meaningful for '+Lv.label+
-   ' — the panel rolls forward to it once the month closes.</p>';
+  // part-month caveat
+  read+='<p class="vwarn">'+A.label+' is <b>'+A.n+' of '+dim(tgt)+' days</b> in. Everything above '+
+   'compares it against the <b>same '+dayRange+'</b> of '+B.label+', so the two sides are on equal '+
+   'footing \u2014 but a window this short still carries single-day noise, and a consultant on leave for '+
+   'part of it reads as a decline rather than a shift. Treat the consultant rows as a list to check, '+
+   'not a conclusion. The window widens with every daily drop.</p>';
   read+='</div>';
   boxes+=read;
  }
  document.getElementById('vznGrid').innerHTML=boxes;
 
- // ---- compact live-month strip above the panel --------------------------
- if(Lv){
-  const lp=pct(Lv.rev,Lv.bud);
+ // ---- compact month-to-date strip above the panel -----------------------
+ {
+  const lp=pct(A.rev,A.bud);
+  const pw=B? pct(A.wkPerDay,B.wkPerDay):0;
+  const po=B? pct(A.wkOpvPerDay,B.wkOpvPerDay):0;
   document.getElementById('mtdStrip').innerHTML=
    '<div class="panel vzn" style="padding-bottom:6px">'+
-   '<h2>'+Lv.label+' month-to-date — '+Lv.n+' of '+dim(Lv.mk)+' days</h2>'+
-   '<div class="note">Live tracker. The variance panel below analyses the last closed month, '+
-   'which is where the department and consultant detail is statistically readable.</div>'+
+   '<h2>'+A.label+' month-to-date \u2014 '+A.n+' of '+dim(tgt)+' days</h2>'+
+   '<div class="note">Live tracker. The variance panel below puts these same '+A.n+' days against '+
+   'the matching days of '+B.label+'.</div>'+
    '<div class="vstrip">'+
-    st('MTD revenue',fmtCr(Lv.rev),'vs '+fmtCr(Lv.bud)+' budget · '+sgn(lp)+'%',cls(lp))+
-    st('Working-day run-rate',fLd(Lv.wkPerDay/L)+'/day',
-      A? (A.label+' '+fLd(A.wkPerDay/L)+'/day · '+sgn(pct(Lv.wkPerDay,A.wkPerDay))+
-         '% · ex-Sunday, ex-holiday'):'',A?cls(pct(Lv.wkPerDay,A.wkPerDay)):'')+
-    st('OP visits / working day',iN(Lv.wkOpvPerDay),
-      A? (A.label+' '+iN(A.wkOpvPerDay)+' · '+sgn(pct(Lv.wkOpvPerDay,A.wkOpvPerDay))+'%'):'',
-      A?cls(pct(Lv.wkOpvPerDay,A.wkOpvPerDay)):'')+
-    st('Cash conversion',(Lv.conv||0).toFixed(0)+'%',fmtCr(Lv.coll)+' collected',
-      A&&A.conv?cls((Lv.conv||0)-A.conv):'')+
+    st('MTD revenue',fmtCr(A.rev),'vs '+fmtCr(A.bud)+' budget \u00b7 '+sgn(lp)+'%',cls(lp))+
+    st('Working-day run-rate',fLd(A.wkPerDay/L)+'/day',
+      B? (B.label+' '+fLd(B.wkPerDay/L)+'/day \u00b7 '+sgn(pw)+'% \u00b7 ex-Sunday, ex-holiday'):'',
+      B?cls(pw):'')+
+    st('OP visits / working day',iN(A.wkOpvPerDay),
+      B? (B.label+' '+iN(B.wkOpvPerDay)+' \u00b7 '+sgn(po)+'%'):'',B?cls(po):'')+
+    st('Cash conversion',(A.conv||0).toFixed(0)+'%',fmtCr(A.coll)+' collected',
+      B&&B.conv?cls((A.conv||0)-B.conv):'')+
    '</div></div>';
  }
 })();
@@ -1592,6 +1744,326 @@ window.drawMatrix=function(mk){
 document.getElementById('mxbtns').innerHTML=mxMonths.map(k=>`<button class="mbtn" data-k="${k}" onclick="drawMatrix('${k}')">${k}</button>`).join('');
 document.getElementById('mxFilter').oninput=()=>drawMatrix(mxMonth);
 if(mxMonth)drawMatrix(mxMonth);
+
+// ---------------- shared helpers for the comparison panels ----------------
+const HOLG=D.holidays||{};
+const nmG=window.__nmT||tc;
+const mLongG=window.__mLong||(mk=>mk);
+const dimG=window.__dim||(mk=>{const [y,m]=mk.split('-').map(Number);return new Date(y,m,0).getDate()});
+const LOW_RS=3000;                       // "quiet day" threshold, rupees
+// working days (ex-Sunday, ex-holiday) elapsed and in the whole month
+function wdays(mk){
+ const R=D.daily[mk]||[];
+ const elapsed=R.filter(r=>r.dow!=='Sun'&&!HOLG[r.date]).length;
+ const [y,m]=mk.split('-').map(Number), last=dimG(mk);
+ let total=0;
+ for(let d=1;d<=last;d++){
+  const dt=new Date(y,m-1,d);
+  const iso=y+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+  if(dt.getDay()!==0&&!HOLG[iso]) total++;
+ }
+ return {elapsed:elapsed, total:total, days:R.length, last:last};
+}
+// per-doctor quiet-day counts for a month: working days billing under LOW_RS
+function quietDays(mk){
+ const h=D.history[mk]; if(!h||!h.docDaily) return {};
+ const R=D.daily[mk]||[];
+ const wd=R.filter(r=>r.dow!=='Sun'&&!HOLG[r.date]).map(r=>+r.date.slice(8));
+ const out={};
+ Object.keys(h.doctors||{}).forEach(nm=>{
+  const dd=h.docDaily[nm]||{};
+  let low=0, nil=0;
+  wd.forEach(d=>{const v=dd[String(d)]||0; if(v<LOW_RS){low++; if(!v) nil++;}});
+  out[nm]={low:low, nil:nil, of:wd.length};
+ });
+ return out;
+}
+function sortWire(tblId,render){
+ document.querySelectorAll('#'+tblId+' th').forEach(th=>{
+  if(!th.dataset.k) return;
+  th.style.cursor='pointer';
+  th.onclick=()=>{const s=window['__srt_'+tblId]=window['__srt_'+tblId]||{k:null,d:-1};
+   s.d=(s.k===th.dataset.k)? -s.d : -1; s.k=th.dataset.k; render();};
+ });
+}
+function applySort(rows,tblId,dflt){
+ const s=window['__srt_'+tblId]||{k:dflt,d:-1};
+ const k=s.k||dflt, d=s.d||-1;
+ return rows.slice().sort((a,b)=>{
+  const x=a[k], y=b[k];
+  if(typeof x==='string'||typeof y==='string')
+   return String(x||'').localeCompare(String(y||''))*(d===-1?1:-1);
+  return ((+y||0)-(+x||0))*(d===-1?1:-1);
+ });
+}
+
+// ---------------- doctor-by-doctor, matched window ----------------
+(function(){
+ const VS=window.__vznStats, VW=window.__vznWindow;
+ if(!VS||!VS.A||!VS.B||!VW) return;
+ const A=VS.A, B=VS.B, W=VW.W;
+ document.getElementById('dcPanel').style.display='';
+ const qd=quietDays(VW.tgt);
+ const names=[...new Set([...Object.keys(A.docs),...Object.keys(B.docs)])];
+ const ALL=names.map(nm=>{
+  const a=A.docs[nm]||{rev:0,opv:0,adm:0,dis:0,dept:''};
+  const b=B.docs[nm]||{rev:0,opv:0,adm:0,dis:0,dept:''};
+  const q=qd[nm]||{low:null,nil:null,of:null};
+  return {doc:nm, dept:(a.dept||b.dept||'—'),
+    revB:b.rev/L, revA:a.rev/L, d:(a.rev-b.rev)/L,
+    p:(b.rev? (a.rev/b.rev-1)*100 : null),
+    opB:b.opv, opA:a.opv, opP:(b.opv? (a.opv/b.opv-1)*100 : null),
+    disB:b.dis, disA:a.dis,
+    rpvB:(b.opv? b.rev/b.opv:0), rpvA:(a.opv? a.rev/a.opv:0),
+    low:q.low, nil:q.nil, ofd:q.of};
+ });
+ const head='<tr><th data-k="doc">Consultant</th><th data-k="dept">Department</th>'+
+  '<th class="r" data-k="revB">'+B.label.slice(0,3)+' 1–'+W+' ₹L</th>'+
+  '<th class="r" data-k="revA">'+A.label.slice(0,3)+' 1–'+W+' ₹L</th>'+
+  '<th class="r" data-k="d">Δ ₹L</th><th class="r" data-k="p">Δ%</th>'+
+  '<th class="r" data-k="opB">'+B.label.slice(0,3)+' OP</th>'+
+  '<th class="r" data-k="opA">'+A.label.slice(0,3)+' OP</th>'+
+  '<th class="r" data-k="opP">Δ OP%</th>'+
+  '<th class="r" data-k="disB">'+B.label.slice(0,3)+' disch</th>'+
+  '<th class="r" data-k="disA">'+A.label.slice(0,3)+' disch</th>'+
+  '<th class="r" data-k="rpvA">₹/visit '+A.label.slice(0,3)+'</th>'+
+  '<th class="r" data-k="low">Quiet days</th></tr>';
+ function render(){
+  const q=(document.getElementById('dcFilter').value||'').toUpperCase();
+  const all=document.getElementById('dcAll').checked;
+  let rows=ALL.filter(r=>!q||r.doc.includes(q)||String(r.dept).toUpperCase().includes(q));
+  if(!all) rows=rows.filter(r=>r.revA>=0.5||r.revB>=0.5);
+  rows=applySort(rows,'dcTab','d');
+  document.querySelector('#dcTab thead').innerHTML=head;
+  document.querySelector('#dcTab tbody').innerHTML=rows.map(r=>{
+   const g=r.d>=0?'good':'bad';
+   return '<tr><td class="doc">'+nmG(r.doc)+'</td><td class="doc">'+nmG(r.dept)+'</td>'+
+    '<td class="r">'+r.revB.toFixed(2)+'</td><td class="r">'+r.revA.toFixed(2)+'</td>'+
+    '<td class="r '+g+'">'+(r.d>=0?'+':'−')+Math.abs(r.d).toFixed(2)+'</td>'+
+    '<td class="r '+g+'">'+(r.p==null?'—':(r.p>=0?'+':'−')+Math.abs(r.p).toFixed(1)+'%')+'</td>'+
+    '<td class="r">'+Math.round(r.opB).toLocaleString('en-IN')+'</td>'+
+    '<td class="r">'+Math.round(r.opA).toLocaleString('en-IN')+'</td>'+
+    '<td class="r '+(r.opP==null?'':(r.opP>=0?'good':'bad'))+'">'+
+      (r.opP==null?'—':(r.opP>=0?'+':'−')+Math.abs(r.opP).toFixed(0)+'%')+'</td>'+
+    '<td class="r">'+Math.round(r.disB)+'</td><td class="r">'+Math.round(r.disA)+'</td>'+
+    '<td class="r">'+(r.rpvA? Math.round(r.rpvA).toLocaleString('en-IN'):'—')+'</td>'+
+    '<td class="r'+(r.low!=null&&r.ofd&&r.low>=r.ofd*0.5?' bad':'')+'">'+
+      (r.low==null?'—':r.low+' / '+r.ofd+(r.nil?' ('+r.nil+' nil)':''))+'</td></tr>';
+  }).join('');
+  sortWire('dcTab',render);          // thead is rewritten each pass, so re-bind
+  document.getElementById('dcNote').innerHTML=
+   'Every consultant’s book over <b>days 1–'+W+'</b> of '+B.label+' and '+A.label+
+   ' — the same calendar window in both months, so a part-month is never set against a full one. '+
+   'Sorted by Δ ₹L; click any header to re-sort. Showing <b>'+rows.length+'</b> of '+ALL.length+
+   ' consultants'+(all?'':' (books under ₹0.5 L in both windows hidden — tick the box for all)')+'.';
+ }
+ window.__srt_dcTab={k:'d',d:1};   // biggest declines first
+ sortWire('dcTab',render);
+ document.getElementById('dcFilter').oninput=render;
+ document.getElementById('dcAll').onchange=render;
+ render();
+ const wdA=wdays(VW.tgt);
+ document.getElementById('dcTitle').textContent=
+  'Doctor by doctor — '+B.label+' vs '+A.label+', days 1–'+W;
+ document.getElementById('dcFoot').innerHTML=
+  'Revenue is billed gross attributed to the consultant in the Daily MIS doctor sheets — '+
+  (A.docRev/A.rev*100).toFixed(1)+'% of gross in '+A.label+'; the unattributed remainder sits '+
+  'against LHRC. <b>Quiet days</b> counts working days (Sundays and holidays excluded) where the '+
+  'consultant billed under ₹'+LOW_RS.toLocaleString('en-IN')+' in '+A.label+' so far, with days '+
+  'at nil shown in brackets — out of '+wdA.elapsed+' working days elapsed. A high count usually '+
+  'means leave or a light clinic roster rather than weak demand, so read it next to the Δ column '+
+  'before drawing a conclusion.';
+})();
+
+// ---------------- month on month: doctors and departments ----------------
+(function(){
+ const mos=Object.keys(D.history).filter(mk=>D.history[mk]&&D.history[mk].doctors&&
+   Object.keys(D.history[mk].doctors).length).sort();
+ if(mos.length<2) return;
+ const show=mos.slice(-8);
+ const cur=mos[mos.length-1];
+ const wd=wdays(cur);
+ const partial=(D.daily[cur]||[]).length<dimG(cur);
+ const projF=(partial&&wd.elapsed)? (wd.total/wd.elapsed) : 1;
+ const qd=quietDays(cur);
+ document.getElementById('momPanel').style.display='';
+ let mode='doc';
+ function agg(mk,byDept){
+  const h=D.history[mk]; const o={};
+  Object.entries(h.doctors||{}).forEach(([nm,v])=>{
+   const k=byDept? (v.dept||'UNALLOCATED') : nm;
+   o[k]=(o[k]||0)+(v.rev||0);
+  });
+  return o;
+ }
+ function render(){
+  const byDept=(mode==='dept');
+  const maps=show.map(mk=>agg(mk,byDept));
+  const keys=[...new Set(maps.flatMap(m=>Object.keys(m)))];
+  const q=(document.getElementById('momFilter').value||'').toUpperCase();
+  let rows=keys.map(k=>{
+   const vals=maps.map(m=>(m[k]||0)/L);
+   const curV=vals[vals.length-1];
+   const prevV=vals.length>1? vals[vals.length-2]:0;
+   const r={k:k, vals:vals, cur:curV, proj:curV*projF,
+     d:curV*projF-prevV, p:(prevV? (curV*projF/prevV-1)*100:null)};
+   if(!byDept){const z=qd[k]||{}; r.low=z.low; r.nil=z.nil; r.ofd=z.of;}
+   return r;
+  }).filter(r=>r.vals.some(v=>v>=0.5))
+    .filter(r=>!q||r.k.includes(q));
+  rows=applySort(rows,'momTab','proj');
+  document.querySelector('#momTab thead').innerHTML=
+   '<tr><th data-k="k" style="position:sticky;left:0;background:#fff;z-index:2">'+
+   (byDept?'Department':'Consultant')+'</th>'+
+   show.map((mk,i)=>'<th class="r" data-k="m'+i+'" style="min-width:56px">'+mName(mk)+
+     (mk===cur&&partial? '<br><span style="font-weight:400;color:#c0392b">MTD</span>':'')+'</th>').join('')+
+   '<th class="r" data-k="proj" style="background:rgba(139,26,74,.07)">'+mName(cur)+
+     ' proj.</th><th class="r" data-k="d">Δ proj vs '+mName(show[show.length-2])+'</th>'+
+   '<th class="r" data-k="p">Δ%</th>'+
+   (byDept?'':'<th class="r" data-k="low">Quiet days</th>')+'</tr>';
+  const mx=Math.max(...rows.slice(0,20).flatMap(r=>r.vals),1);
+  document.querySelector('#momTab tbody').innerHTML=rows.map(r=>{
+   const g=r.d>=0?'good':'bad';
+   return '<tr><td class="doc" style="position:sticky;left:0;background:#fff;z-index:1">'+
+    nmG(r.k)+'</td>'+
+    r.vals.map(v=>{
+     if(!v) return '<td class="r" style="color:#c8d0d9">·</td>';
+     const a=Math.min(v/mx,1);
+     return '<td class="r" style="background:rgba(43,124,190,'+(0.05+a*0.45).toFixed(2)+')'+
+       (a>0.62?';color:#fff':'')+'">'+v.toFixed(1)+'</td>';
+    }).join('')+
+    '<td class="r" style="background:rgba(139,26,74,.07)"><b>'+r.proj.toFixed(1)+'</b></td>'+
+    '<td class="r '+g+'">'+(r.d>=0?'+':'−')+Math.abs(r.d).toFixed(1)+'</td>'+
+    '<td class="r '+g+'">'+(r.p==null?'—':(r.p>=0?'+':'−')+Math.abs(r.p).toFixed(0)+'%')+'</td>'+
+    (byDept?'':'<td class="r'+(r.low!=null&&r.ofd&&r.low>=r.ofd*0.5?' bad':'')+'">'+
+      (r.low==null?'—':r.low+' / '+r.ofd+(r.nil?' ('+r.nil+' nil)':''))+'</td>')+
+    '</tr>';
+  }).join('');
+  sortWire('momTab',render);         // thead is rewritten each pass, so re-bind
+  document.getElementById('momTitle').textContent=
+   'Month on Month — '+(byDept?'Departments':'Doctors');
+  document.getElementById('momNote').innerHTML=
+   'Billed gross revenue in <b>₹ Lakhs</b> by '+(byDept?'department':'consultant')+
+   ', one column per month. <b>'+mName(cur)+'</b> is month-to-date ('+wd.days+' of '+wd.last+
+   ' days)'+(partial? ', so the shaded <b>proj.</b> column scales it to the full month on the '+
+   'working-day run-rate — '+wd.elapsed+' working days elapsed of '+wd.total+
+   ', a factor of '+projF.toFixed(2)+'×':'')+'. Showing '+rows.length+' rows; '+
+   'click a header to sort.';
+  document.querySelectorAll('#momBtns .mbtn').forEach(b=>b.classList.toggle('on',b.dataset.m===mode));
+ }
+ document.getElementById('momBtns').innerHTML=
+  '<button class="mbtn" data-m="doc">Doctors</button>'+
+  '<button class="mbtn" data-m="dept">Departments</button>';
+ document.querySelectorAll('#momBtns .mbtn').forEach(b=>b.onclick=()=>{
+  mode=b.dataset.m; window.__srt_momTab=null; render();});
+ document.getElementById('momFilter').oninput=render;
+ sortWire('momTab',render);
+ render();
+ const tot=Object.values(D.history[cur].doctors||{}).reduce((a,v)=>a+(v.rev||0),0);
+ document.getElementById('momFoot').innerHTML=
+  'The projection is a straight working-day extrapolation of each book — it assumes the rest of '+
+  mName(cur)+' looks like the days already banked, and makes no allowance for leave, planned lists '+
+  'or seasonality. Doctor-attributed revenue for '+mName(cur)+' totals '+fmtCr(tot)+
+  ' MTD, projecting to '+fmtCr(tot*projF)+'; the flash’s own month projection is the figure to '+
+  'trust for the hospital total. <b>Quiet days</b> = working days billing under ₹'+
+  LOW_RS.toLocaleString('en-IN')+' so far this month (nil days in brackets).';
+})();
+
+// ---------------- three-FY total revenue tracker ----------------
+(function(){
+ const MR=D.momRev;
+ if(!MR||!MR.fys||MR.fys.length<2) return;
+ document.getElementById('tfPanel').style.display='';
+ const MO=['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
+ const fys=MR.fys.slice();
+ const curFY=fys[fys.length-1], prevFY=fys[fys.length-2];
+ const curM=MR.months[curFY]||{}, prevM=MR.months[prevFY]||{};
+ // which months are actual, and where does the live month sit
+ const actualMonths=MO.filter(m=>curM[m]!=null);
+ const nAct=actualMonths.length;
+ // the live month from the daily data (month-to-date, not in the MoM workbook yet)
+ const dkeys=Object.keys(D.daily).filter(k=>(D.daily[k]||[]).length).sort();
+ const liveK=dkeys[dkeys.length-1];
+ const liveMon=liveK? MO[(+liveK.split('-')[1]+8)%12]:null;
+ const liveIsNew=liveMon&&curM[liveMon]==null;
+ let liveProj=null, liveMTD=null, liveWd=null;
+ if(liveIsNew){
+  liveWd=wdays(liveK);
+  liveMTD=(D.daily[liveK]||[]).reduce((a,r)=>a+(r.revTot||0),0)/CR;
+  liveProj=liveWd.elapsed? liveMTD*(liveWd.total/liveWd.elapsed):liveMTD;
+ }
+ // default growth = YTD YoY on the closed months
+ const ytdCur=actualMonths.reduce((a,m)=>a+curM[m],0);
+ const ytdPrev=actualMonths.reduce((a,m)=>a+(prevM[m]||0),0);
+ const gYTD=ytdPrev? (ytdCur/ytdPrev-1)*100 : 0;
+ const slider=document.getElementById('tfG');
+ slider.value=Math.max(-5,Math.min(40,Math.round(gYTD*2)/2));
+ function render(){
+  const g=+slider.value/100;
+  document.getElementById('tfGVal').textContent=(g>=0?'+':'')+(g*100).toFixed(1)+'%';
+  let sums={};
+  fys.forEach(f=>sums[f]=0); sums.act=0; sums.proj=0;
+  const body=MO.map(m=>{
+   const cells=fys.slice(0,-1).map(f=>{const v=(MR.months[f]||{})[m];
+     if(v!=null) sums[f]+=v;
+     return '<td class="r">'+(v==null?'—':v.toFixed(2))+'</td>';});
+   const act=curM[m];
+   let proj=null, basis='';
+   if(act!=null){ sums.act+=act; }
+   else if(m===liveMon&&liveProj!=null){ proj=liveProj; basis='run-rate'; sums.proj+=proj; }
+   else if(prevM[m]!=null){ proj=(prevM[m])*(1+g); basis='trend'; sums.proj+=proj; }
+   const tot=(act!=null)? act : proj;
+   const yoy=(prevM[m]&&tot!=null)? (tot/prevM[m]-1)*100 : null;
+   sums[curFY]=sums.act+sums.proj;
+   return '<tr'+(m===liveMon?' style="background:rgba(139,26,74,.05)"':'')+'><td>'+m+'</td>'+
+    cells.join('')+
+    '<td class="r">'+(act==null?'':act.toFixed(2))+'</td>'+
+    '<td class="r" style="color:var(--gray)">'+(proj==null?'':proj.toFixed(2)+
+      (basis==='run-rate'?' <span style="font-size:9.5px">rr</span>':''))+'</td>'+
+    '<td class="r"><b>'+(tot==null?'—':tot.toFixed(2))+'</b></td>'+
+    '<td class="r '+(yoy==null?'':(yoy>=0?'good':'bad'))+'">'+
+      (yoy==null?'—':(yoy>=0?'+':'−')+Math.abs(yoy).toFixed(1)+'%')+'</td></tr>';
+  }).join('');
+  const grand=sums.act+sums.proj;
+  const prevTot=MO.reduce((a,m)=>a+(prevM[m]||0),0);
+  const foot='<tr class="fytot"><td>FY total</td>'+
+   fys.slice(0,-1).map(f=>'<td class="r">'+sums[f].toFixed(2)+'</td>').join('')+
+   '<td class="r">'+sums.act.toFixed(2)+'</td>'+
+   '<td class="r">'+sums.proj.toFixed(2)+'</td>'+
+   '<td class="r">'+grand.toFixed(2)+'</td>'+
+   '<td class="r '+(grand>=prevTot?'good':'bad')+'">'+
+     (prevTot? ((grand/prevTot-1)>=0?'+':'−')+Math.abs((grand/prevTot-1)*100).toFixed(1)+'%':'—')+
+   '</td></tr>';
+  document.querySelector('#tfTab thead').innerHTML=
+   '<tr><th>Month</th>'+fys.slice(0,-1).map(f=>'<th class="r">'+f+'</th>').join('')+
+   '<th class="r">'+curFY+' actual</th><th class="r">'+curFY+' projected</th>'+
+   '<th class="r">'+curFY+' act + proj</th><th class="r">YoY % vs '+prevFY+'</th></tr>';
+  document.querySelector('#tfTab tbody').innerHTML=body+foot;
+  const aopTot=(D.aop&&D.aop.fyPlanTotal)? D.aop.fyPlanTotal/CR : null;
+  document.getElementById('tfFoot').innerHTML=
+   'Actuals are closed months from <b>'+MR.source+'</b> — gross billed revenue on the same basis '+
+   'as the flash YEAR sheet (IP + OP Kochi incl. pharmacy, F&amp;B, and VPSLMC Calicut OP), not the '+
+   'audited P&amp;L. Months with no actual are grown off '+prevFY+
+   ' at the rate on the slider; the default is the '+nAct+'-month YTD rate of '+
+   (gYTD>=0?'+':'')+gYTD.toFixed(1)+'%. '+
+   (liveIsNew? '<b>'+liveMon+'</b> is different: it is projected from '+liveMTD.toFixed(2)+
+     ' Cr banked over '+liveWd.elapsed+' working days, scaled to '+liveWd.total+
+     ' — marked <i>rr</i>. On the trend rate it would instead read '+
+     ((prevM[liveMon]||0)*(1+g)).toFixed(2)+' Cr, so the two methods disagree by '+
+     Math.abs(liveProj-(prevM[liveMon]||0)*(1+g)).toFixed(2)+
+     ' Cr — the run-rate is what the month is actually doing. ':'')+
+   (aopTot? 'FY27 AOP plan is '+aopTot.toFixed(2)+' Cr, so this lands '+
+     (grand>=aopTot?'above':'below')+' plan by '+Math.abs(grand-aopTot).toFixed(2)+' Cr.':'');
+  document.getElementById('tfCurBasis').textContent=
+   liveIsNew? (liveMon+' on run-rate') : 'all closed months actual';
+ }
+ slider.oninput=render;
+ document.getElementById('tfTitle').textContent='Total Revenue — '+fys.join(' / ');
+ document.getElementById('tfNote').innerHTML=
+  'Monthly gross revenue across three fiscal years, ₹ Cr. Closed months are actual; the rest '+
+  'are projected. The FY total line is what the year lands at on these assumptions.';
+ render();
+})();
 
 // ---------------- department league table ----------------
 if(hCur){
