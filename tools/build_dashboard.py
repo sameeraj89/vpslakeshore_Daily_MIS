@@ -761,11 +761,20 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <h2 id="momTitle">Month on Month — Doctors</h2>
 <div class="note" id="momNote"></div>
 <div style="margin-bottom:8px">
-<span id="momBtns"></span>
-<input id="momFilter" placeholder="Filter…" style="padding:5px 10px;border:1px solid #d4dbe3;border-radius:6px;width:220px;font-size:12.5px;margin-left:8px">
+<input id="momFilter" placeholder="Filter consultant…" style="padding:5px 10px;border:1px solid #d4dbe3;border-radius:6px;width:220px;font-size:12.5px">
 </div>
 <div class="scroll" style="max-height:620px;overflow:auto"><table id="momTab"><thead></thead><tbody></tbody></table></div>
 <div class="note" id="momFoot" style="margin-top:8px"></div>
+</div>
+
+<div class="panel" id="mdPanel" style="display:none">
+<h2 id="mdTitle">Month on Month — Departments</h2>
+<div class="note" id="mdNote"></div>
+<div style="margin-bottom:8px">
+<input id="mdFilter" placeholder="Filter department…" style="padding:5px 10px;border:1px solid #d4dbe3;border-radius:6px;width:220px;font-size:12.5px">
+</div>
+<div class="scroll" style="max-height:620px;overflow:auto"><table id="mdTab"><thead></thead><tbody></tbody></table></div>
+<div class="note" id="mdFoot" style="margin-top:8px"></div>
 </div>
 
 <div class="panel"><h2>Daily Gross Revenue — Actual vs Budget</h2>
@@ -1875,8 +1884,8 @@ function applySort(rows,tblId,dflt){
   'before drawing a conclusion.';
 })();
 
-// ---------------- month on month: doctors and departments ----------------
-(function(){
+// ---------------- month on month: doctors, and departments ----------------
+function buildMoM(cfg){
  const mos=Object.keys(D.history).filter(mk=>D.history[mk]&&D.history[mk].doctors&&
    Object.keys(D.history[mk].doctors).length).sort();
  if(mos.length<2) return;
@@ -1885,49 +1894,52 @@ function applySort(rows,tblId,dflt){
  const wd=wdays(cur);
  const partial=(D.daily[cur]||[]).length<dimG(cur);
  const projF=(partial&&wd.elapsed)? (wd.total/wd.elapsed) : 1;
- const qd=quietDays(cur);
- document.getElementById('momPanel').style.display='';
- let mode='doc';
- function agg(mk,byDept){
-  const h=D.history[mk]; const o={};
+ const byDept=!!cfg.byDept;
+ const qd=byDept? {} : quietDays(cur);
+ const T=cfg.tab;
+ document.getElementById(cfg.panel).style.display='';
+ function agg(mk){
+  const h=D.history[mk], o={};
   Object.entries(h.doctors||{}).forEach(([nm,v])=>{
    const k=byDept? (v.dept||'UNALLOCATED') : nm;
    o[k]=(o[k]||0)+(v.rev||0);
   });
   return o;
  }
+ const maps=show.map(agg);
  function render(){
-  const byDept=(mode==='dept');
-  const maps=show.map(mk=>agg(mk,byDept));
   const keys=[...new Set(maps.flatMap(m=>Object.keys(m)))];
-  const q=(document.getElementById('momFilter').value||'').toUpperCase();
+  const q=(document.getElementById(cfg.filter).value||'').toUpperCase();
   let rows=keys.map(k=>{
    const vals=maps.map(m=>(m[k]||0)/L);
    const curV=vals[vals.length-1];
    const prevV=vals.length>1? vals[vals.length-2]:0;
    const r={k:k, vals:vals, cur:curV, proj:curV*projF,
      d:curV*projF-prevV, p:(prevV? (curV*projF/prevV-1)*100:null)};
+   vals.forEach((v,i)=>r['m'+i]=v);
    if(!byDept){const z=qd[k]||{}; r.low=z.low; r.nil=z.nil; r.ofd=z.of;}
    return r;
   }).filter(r=>r.vals.some(v=>v>=0.5))
     .filter(r=>!q||r.k.includes(q));
-  rows=applySort(rows,'momTab','proj');
-  document.querySelector('#momTab thead').innerHTML=
+  const tot=rows.reduce((a,r)=>({cur:a.cur+r.cur, proj:a.proj+r.proj,
+    prev:a.prev+(r.vals[r.vals.length-2]||0)}),{cur:0,proj:0,prev:0});
+  rows=applySort(rows,T,'proj');
+  document.querySelector('#'+T+' thead').innerHTML=
    '<tr><th data-k="k" style="position:sticky;left:0;background:#fff;z-index:2">'+
    (byDept?'Department':'Consultant')+'</th>'+
    show.map((mk,i)=>'<th class="r" data-k="m'+i+'" style="min-width:56px">'+mName(mk)+
      (mk===cur&&partial? '<br><span style="font-weight:400;color:#c0392b">MTD</span>':'')+'</th>').join('')+
    '<th class="r" data-k="proj" style="background:rgba(139,26,74,.07)">'+mName(cur)+
-     ' proj.</th><th class="r" data-k="d">Δ proj vs '+mName(show[show.length-2])+'</th>'+
-   '<th class="r" data-k="p">Δ%</th>'+
+     ' proj.</th><th class="r" data-k="d">&Delta; proj vs '+mName(show[show.length-2])+'</th>'+
+   '<th class="r" data-k="p">&Delta;%</th>'+
    (byDept?'':'<th class="r" data-k="low">Quiet days</th>')+'</tr>';
   const mx=Math.max(...rows.slice(0,20).flatMap(r=>r.vals),1);
-  document.querySelector('#momTab tbody').innerHTML=rows.map(r=>{
+  const body=rows.map(r=>{
    const g=r.d>=0?'good':'bad';
    return '<tr><td class="doc" style="position:sticky;left:0;background:#fff;z-index:1">'+
     nmG(r.k)+'</td>'+
     r.vals.map(v=>{
-     if(!v) return '<td class="r" style="color:#c8d0d9">·</td>';
+     if(!v) return '<td class="r" style="color:#c8d0d9">&middot;</td>';
      const a=Math.min(v/mx,1);
      return '<td class="r" style="background:rgba(43,124,190,'+(0.05+a*0.45).toFixed(2)+')'+
        (a>0.62?';color:#fff':'')+'">'+v.toFixed(1)+'</td>';
@@ -1939,35 +1951,43 @@ function applySort(rows,tblId,dflt){
       (r.low==null?'—':r.low+' / '+r.ofd+(r.nil?' ('+r.nil+' nil)':''))+'</td>')+
     '</tr>';
   }).join('');
-  sortWire('momTab',render);         // thead is rewritten each pass, so re-bind
-  document.getElementById('momTitle').textContent=
-   'Month on Month — '+(byDept?'Departments':'Doctors');
-  document.getElementById('momNote').innerHTML=
+  const tg=(tot.proj-tot.prev)>=0?'good':'bad';
+  const foot='<tr class="fytot"><td style="position:sticky;left:0;background:#f4f8fc">Total shown</td>'+
+   show.map((mk,i)=>'<td class="r">'+rows.reduce((a,r)=>a+r.vals[i],0).toFixed(0)+'</td>').join('')+
+   '<td class="r">'+tot.proj.toFixed(0)+'</td>'+
+   '<td class="r '+tg+'">'+((tot.proj-tot.prev)>=0?'+':'−')+
+     Math.abs(tot.proj-tot.prev).toFixed(0)+'</td>'+
+   '<td class="r '+tg+'">'+(tot.prev? ((tot.proj/tot.prev-1)>=0?'+':'−')+
+     Math.abs((tot.proj/tot.prev-1)*100).toFixed(0)+'%':'—')+'</td>'+
+   (byDept?'':'<td></td>')+'</tr>';
+  document.querySelector('#'+T+' tbody').innerHTML=body+foot;
+  sortWire(T,render);
+  document.getElementById(cfg.note).innerHTML=
    'Billed gross revenue in <b>₹ Lakhs</b> by '+(byDept?'department':'consultant')+
    ', one column per month. <b>'+mName(cur)+'</b> is month-to-date ('+wd.days+' of '+wd.last+
    ' days)'+(partial? ', so the shaded <b>proj.</b> column scales it to the full month on the '+
    'working-day run-rate — '+wd.elapsed+' working days elapsed of '+wd.total+
    ', a factor of '+projF.toFixed(2)+'×':'')+'. Showing '+rows.length+' rows; '+
    'click a header to sort.';
-  document.querySelectorAll('#momBtns .mbtn').forEach(b=>b.classList.toggle('on',b.dataset.m===mode));
  }
- document.getElementById('momBtns').innerHTML=
-  '<button class="mbtn" data-m="doc">Doctors</button>'+
-  '<button class="mbtn" data-m="dept">Departments</button>';
- document.querySelectorAll('#momBtns .mbtn').forEach(b=>b.onclick=()=>{
-  mode=b.dataset.m; window.__srt_momTab=null; render();});
- document.getElementById('momFilter').oninput=render;
- sortWire('momTab',render);
+ document.getElementById(cfg.filter).oninput=render;
  render();
- const tot=Object.values(D.history[cur].doctors||{}).reduce((a,v)=>a+(v.rev||0),0);
- document.getElementById('momFoot').innerHTML=
-  'The projection is a straight working-day extrapolation of each book — it assumes the rest of '+
-  mName(cur)+' looks like the days already banked, and makes no allowance for leave, planned lists '+
-  'or seasonality. Doctor-attributed revenue for '+mName(cur)+' totals '+fmtCr(tot)+
-  ' MTD, projecting to '+fmtCr(tot*projF)+'; the flash’s own month projection is the figure to '+
-  'trust for the hospital total. <b>Quiet days</b> = working days billing under ₹'+
-  LOW_RS.toLocaleString('en-IN')+' so far this month (nil days in brackets).';
-})();
+ const totCur=Object.values(D.history[cur].doctors||{}).reduce((a,v)=>a+(v.rev||0),0);
+ document.getElementById(cfg.foot).innerHTML=
+  'The projection is a straight working-day extrapolation of each '+
+  (byDept?'department':'book')+' — it assumes the rest of '+mName(cur)+
+  ' looks like the days already banked, and makes no allowance for leave, planned lists '+
+  'or seasonality. Doctor-attributed revenue for '+mName(cur)+' totals '+fmtCr(totCur)+
+  ' MTD, projecting to '+fmtCr(totCur*projF)+'; the flash’s own month projection is the '+
+  'figure to trust for the hospital total.'+
+  (byDept? ' Consultants with no department in the MIS roll up under Unallocated.'
+         : ' <b>Quiet days</b> = working days billing under ₹'+
+           LOW_RS.toLocaleString('en-IN')+' so far this month (nil days in brackets).');
+}
+buildMoM({panel:'momPanel', tab:'momTab', note:'momNote', foot:'momFoot',
+          filter:'momFilter', byDept:false});
+buildMoM({panel:'mdPanel', tab:'mdTab', note:'mdNote', foot:'mdFoot',
+          filter:'mdFilter', byDept:true});
 
 // ---------------- three-FY total revenue tracker ----------------
 (function(){
