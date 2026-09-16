@@ -904,6 +904,28 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <div class="panel"><h2>Read-across</h2>
 <div class="note">Auto-generated from the current assumption set.</div>
 <div id="pcomment" style="font-size:12.5px;line-height:1.65;color:#33475b"></div></div>
+
+<div class="panel" id="ebPanel" style="border-top:3px solid var(--maroon)">
+<h2>FY 26-27 EBITDA — Actual, Projected and AOP Plan</h2>
+<div class="note" id="ebNote"></div>
+<div class="ctrls">
+ <div class="ctrl"><span class="cl">Fixed cost for open months</span>
+  <select id="ebFixSel" style="font-size:12px;padding:3px 6px;border:1px solid #d5dbe3;border-radius:4px;color:#33475b;background:#fff">
+   <option value="flex" selected>AOP plan × YTD actual-to-plan ratio</option>
+   <option value="plan">AOP plan as budgeted</option>
+   <option value="avg">Flat at YTD average per month</option>
+  </select></div>
+ <div class="ctrl"><span class="cl">Contribution margin used</span><span class="cv" id="ebCmVal"></span></div>
+ <div class="ctrl"><span class="cl">Fixed cost used</span><span class="cv" id="ebFcVal"></span></div>
+</div>
+<div class="cards" id="ebCards" style="margin:0 0 12px"></div>
+<canvas id="ebChart" style="max-height:340px"></canvas>
+<div class="scroll" style="margin-top:12px"><table id="ebTable"><thead><tr>
+<th>Month</th><th class="r">Revenue (₹ Cr)</th><th class="r">Variable cost</th><th class="r">Fixed cost</th>
+<th class="r">EBITDA (₹ Cr)</th><th class="r">Margin</th><th class="r">AOP plan EBITDA</th><th class="r">vs plan</th><th>Basis</th>
+</tr></thead><tbody></tbody></table></div>
+<div id="ebComment" style="font-size:12.5px;line-height:1.65;color:#33475b;margin-top:10px"></div>
+</div>
 </div>
 
 <div class="wrap view" id="viewCmi">
@@ -2381,7 +2403,94 @@ function drawProj(){
   '<span style="color:#7F8C9B">Caveat: this is a top-down run-rate extrapolation. It holds realization, payer mix and case mix at current levels, and '+
   (M.seas?'borrows its monthly shape from last year — so any tariff revision, bed addition or Onam/festival shift moves it independently of days.':
    'applies no seasonality, so it will overstate the Nov trough and understate the Jan–Feb peak.')+'</span>';
+ drawEbitda(M);
 }
+
+// ============ EBITDA projection: revenue projection × AOP-tracker cost structure ============
+// Actual months come straight from the AOP performance tracker (revenue, variable cost, fixed
+// cost, EBITDA). Open months take the projection tab's revenue, re-based to the tracker's
+// total-revenue definition (adds F&B / other income, nets the gross-vs-P&L gap) with a single
+// calibration ratio measured on the months where both exist, then apply the YTD actual
+// contribution margin and a fixed-cost line chosen in the control. Plan figures are untouched.
+const TRK=(D.fy27&&D.fy27.tracker)||null;
+const trkLine2=n=>TRK? (TRK.lines||[]).find(l=>l.label===n):null;
+function drawEbitda(M){
+ const box=document.getElementById('ebPanel'); if(!box) return;
+ const R=trkLine2('Total Revenue'), V=trkLine2('Total Variable Cost'), F=trkLine2('Total Fixed Cost'), E=trkLine2('EBITDA');
+ const ok=v=>v!=null&&isFinite(v);
+ if(!R||!V||!F||!E||!R.months||R.months.length<12){ box.style.display='none'; return; }
+ const hasAct=MOS.map((_,i)=>ok(E.months[i].act)&&ok(R.months[i].act)&&R.months[i].act>0);
+ const actIdx=MOS.map((_,i)=>i).filter(i=>hasAct[i]);
+ if(!actIdx.length){ box.style.display='none'; return; }
+ box.style.display='';
+ const sum=(L,k,idx)=>idx.reduce((a,i)=>a+(ok(L.months[i][k])? L.months[i][k]:0),0);
+ const ytdRev=sum(R,'act',actIdx), ytdVar=sum(V,'act',actIdx), ytdFix=sum(F,'act',actIdx), ytdEb=sum(E,'act',actIdx);
+ const ytdEbPlan=sum(E,'plan',actIdx), ytdFixPlan=sum(F,'plan',actIdx);
+ const varRatio=ytdRev? ytdVar/ytdRev:0, cm=1-varRatio;
+ const flashSame=actIdx.reduce((a,i)=>a+(cur.months[i]? cur.months[i].revTot:0),0);
+ const cal=flashSame>0? ytdRev/flashSame : 1;
+ const fixMode=document.getElementById('ebFixSel').value;
+ const fixRatio=ytdFixPlan? ytdFix/ytdFixPlan : 1, fixAvg=ytdFix/actIdx.length;
+ const planTot=MOS.reduce((a,_,i)=>a+(ok(E.months[i].plan)? E.months[i].plan:0),0);
+ const rows=M.rows.map((r,i)=>{
+  const plan=ok(E.months[i].plan)? E.months[i].plan:null;
+  if(hasAct[i]) return {i,ms:MOS[i],rev:R.months[i].act,vc:V.months[i].act,fc:F.months[i].act,eb:E.months[i].act,plan,act:true,basis:'Actual (AOP tracker)'};
+  const rev=r.rev*cal, vc=rev*varRatio;
+  const fc= fixMode==='plan'? (ok(F.months[i].plan)? F.months[i].plan:fixAvg) : fixMode==='avg'? fixAvg : (ok(F.months[i].plan)? F.months[i].plan*fixRatio:fixAvg);
+  return {i,ms:MOS[i],rev,vc,fc,eb:rev-vc-fc,plan,act:false,
+    basis:(r.closed? 'Flash actual':r.isCur? 'MTD + run-rate':'Run-rate')+' revenue × cost structure'};
+ });
+ const tot=rows.reduce((a,r)=>a+r.eb,0), totRev=rows.reduce((a,r)=>a+r.rev,0);
+ const open=rows.filter(r=>!r.act);
+ const openEb=open.reduce((a,r)=>a+r.eb,0), openPlan=open.reduce((a,r)=>a+(r.plan||0),0);
+ const fmtC=v=>'₹'+(v/CR).toFixed(1)+' Cr';
+ const dv=v=>(v>=0?'+₹':'−₹')+Math.abs(v/CR).toFixed(1)+' Cr';
+ const pct=(a,b)=>b? (a/b*100).toFixed(1)+'%':'—';
+ const fixLbl={flex:'AOP plan × '+(fixRatio*100).toFixed(0)+'% (YTD actual ÷ plan)',plan:'AOP plan as budgeted',avg:'flat '+fmtC(fixAvg)+' / month'}[fixMode];
+ document.getElementById('ebCmVal').textContent=(cm*100).toFixed(1)+'% (variable cost '+(varRatio*100).toFixed(1)+'% of revenue, YTD actual)';
+ document.getElementById('ebFcVal').textContent=fixLbl;
+ document.getElementById('ebNote').innerHTML='₹ Cr. '+actIdx.length+' months ('+MOS[actIdx[0]]+'–'+MOS[actIdx[actIdx.length-1]]+
+  ') are tracker actuals; the rest is an <b>extrapolation</b> that follows the revenue projection above (same run-rate, ramp and seasonality settings) and the current cost structure. '+
+  'The AOP plan line is unchanged from the tracker.';
+ const cards=[
+  ['FY 26-27 EBITDA projection',fmtC(tot),pct(tot,totRev)+' margin on '+fmtC(totRev)+' revenue',tot>=planTot],
+  ['vs AOP plan',dv(tot-planTot),'plan '+fmtC(planTot)+' · '+pct(tot,planTot)+' of plan',tot>=planTot],
+  ['YTD actual ('+MOS[actIdx[0]]+'–'+MOS[actIdx[actIdx.length-1]]+')',fmtC(ytdEb),pct(ytdEb,ytdRev)+' margin · plan '+fmtC(ytdEbPlan)+' ('+dv(ytdEb-ytdEbPlan)+')',ytdEb>=ytdEbPlan],
+  ['Open months implied',fmtC(openEb),open.length+' months · plan '+fmtC(openPlan)+' ('+dv(openEb-openPlan)+')',openEb>=openPlan],
+  ['Fixed cost run-rate',fmtC(fixAvg)+' / mo','plan avg '+fmtC(ytdFixPlan/actIdx.length)+' / mo so far',ytdFix<=ytdFixPlan]
+ ];
+ document.getElementById('ebCards').innerHTML=cards.map((c,n)=>card(c[0],c[1],c[2],c[3]?'up':'dn',n>0)).join('');
+ if(pCharts.e) pCharts.e.destroy();
+ pCharts.e=new Chart(document.getElementById('ebChart'),{data:{labels:MOS,datasets:[
+  {type:'bar',label:'EBITDA actual',data:rows.map(r=>r.act? r.eb/CR:null),backgroundColor:BLUE,borderRadius:3,order:3,yAxisID:'y'},
+  {type:'bar',label:'EBITDA projected',data:rows.map(r=>r.act? null:r.eb/CR),backgroundColor:LT,borderColor:BLUE,borderWidth:1.4,borderRadius:3,order:3,yAxisID:'y'},
+  {type:'line',label:'AOP plan',data:rows.map(r=>r.plan!=null? r.plan/CR:null),borderColor:MAROON,borderWidth:2,pointRadius:3,pointBackgroundColor:MAROON,tension:.25,order:1,yAxisID:'y'},
+  {type:'line',label:'Margin %',data:rows.map(r=>r.rev? r.eb/r.rev*100:null),borderColor:GRAY,borderDash:[4,3],borderWidth:1.5,pointRadius:2,tension:.25,order:2,yAxisID:'y2'}
+ ]},options:{plugins:{legend:{labels:{boxWidth:12,font:{size:11}}},
+  tooltip:{callbacks:{label:c=>c.dataset.yAxisID==='y2'? c.dataset.label+': '+(+c.raw).toFixed(1)+'%' : c.dataset.label+': ₹'+(+c.raw).toFixed(2)+' Cr'}}},
+  scales:{y:{title:{display:true,text:'₹ Cr'},beginAtZero:true},
+          y2:{position:'right',min:0,max:50,grid:{drawOnChartArea:false},ticks:{callback:v=>v+'%'},title:{display:true,text:'Margin'}}}}});
+ const vt=v=>v==null? '—':'<span class="tag '+(v>=0?'g':'r')+'">'+(v>=0?'+':'')+(v/CR).toFixed(2)+'</span>';
+ document.querySelector('#ebTable tbody').innerHTML=rows.map(r=>
+  '<tr'+(r.act?'':' style="color:#33475b"')+'><td>'+r.ms+(r.act?'':' <span style="color:#7F8C9B;font-size:10px">proj</span>')+'</td>'+
+  '<td class="r">'+(r.rev/CR).toFixed(2)+'</td><td class="r">'+(r.vc/CR).toFixed(2)+'</td><td class="r">'+(r.fc/CR).toFixed(2)+'</td>'+
+  '<td class="r"><b>'+(r.eb/CR).toFixed(2)+'</b></td><td class="r">'+pct(r.eb,r.rev)+'</td>'+
+  '<td class="r">'+(r.plan!=null?(r.plan/CR).toFixed(2):'—')+'</td><td class="r">'+vt(r.plan!=null? r.eb-r.plan:null)+'</td>'+
+  '<td style="font-size:11px;color:#7F8C9B">'+r.basis+'</td></tr>').join('')+
+  '<tr class="fytot"><td>FY 26-27 total</td><td class="r">'+(totRev/CR).toFixed(1)+'</td><td class="r">'+(rows.reduce((a,r)=>a+r.vc,0)/CR).toFixed(1)+'</td>'+
+  '<td class="r">'+(rows.reduce((a,r)=>a+r.fc,0)/CR).toFixed(1)+'</td><td class="r">'+(tot/CR).toFixed(1)+'</td><td class="r">'+pct(tot,totRev)+'</td>'+
+  '<td class="r">'+(planTot/CR).toFixed(1)+'</td><td class="r">'+vt(tot-planTot)+'</td><td></td></tr>';
+ const needEb=planTot-ytdEb, needMargin=open.reduce((a,r)=>a+r.rev,0)? needEb/open.reduce((a,r)=>a+r.rev,0)*100:null;
+ document.getElementById('ebComment').innerHTML=
+  'On the current revenue projection, FY 26-27 EBITDA lands at <b>'+fmtC(tot)+'</b> ('+pct(tot,totRev)+' margin), '+
+  fmtC(Math.abs(tot-planTot)).replace('₹','₹')+' '+(tot>=planTot?'above':'below')+' the AOP plan of '+fmtC(planTot)+'. '+
+  'The '+actIdx.length+' closed months are '+dv(ytdEb-ytdEbPlan)+' against plan, so the open months need '+fmtC(needEb)+
+  (needMargin!=null? ' — a <b>'+needMargin.toFixed(1)+'% margin</b> on their projected revenue, against the '+pct(ytdEb,ytdRev)+' delivered so far':'')+'. '+
+  '<span style="color:#7F8C9B">Method: open-month revenue is the projection tab\'s figure × '+cal.toFixed(3)+' to move from the flash gross basis to the tracker\'s total revenue (F&amp;B, other income, P&amp;L netting); '+
+  'variable cost is held at '+(varRatio*100).toFixed(1)+'% of revenue (YTD actual); fixed cost is '+fixLbl+'. '+
+  'It carries no cost initiatives, wage revisions or new-bed opex — the AOP tracker\'s own plan already embeds those, which is part of why the plan back-loads margin.</span>';
+}
+document.getElementById('ebFixSel').addEventListener('change',()=>drawProj());
 
 (function initProj(){
  document.getElementById('rrBtns').innerHTML=RRW.map(w=>
