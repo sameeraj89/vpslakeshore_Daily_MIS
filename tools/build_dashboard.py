@@ -738,7 +738,7 @@ tr.fytot td{font-weight:700;border-top:2px solid #d4dbe3;background:#f4f8fc}
 <div class="cards" id="cards"></div>
 
 <div id="mtdStrip"></div>
-<div class="panel vzn" id="vznPanel">
+<div class="panel vzn" id="vznPanel" style="display:none">
 <h2 id="vznTitle">Month-on-month variance</h2>
 <div class="note" id="vznNote"></div>
 
@@ -1833,7 +1833,7 @@ function applySort(rows,tblId,dflt){
  const VS=window.__vznStats, VW=window.__vznWindow;
  if(!VS||!VS.A||!VS.B||!VW) return;
  const A=VS.A, B=VS.B, W=VW.W;
- document.getElementById('dcPanel').style.display='';
+ /* dcPanel hidden 25-Sep-2026 */
  const qd=quietDays(VW.tgt);
  const names=[...new Set([...Object.keys(A.docs),...Object.keys(B.docs)])];
  const ALL=names.map(nm=>{
