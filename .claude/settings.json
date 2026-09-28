@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "git-workflow": {
+      "source": {
+        "source": "github",
+        "repo": "Ahacad/gstack"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "gstack@git-workflow": true
+  }
+}
